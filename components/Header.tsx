@@ -22,20 +22,23 @@ function NavLink({
   active,
   onClick,
   disabled,
+  className = "",
 }: {
   href: string;
   children: React.ReactNode;
   active?: boolean;
   onClick?: () => void;
   disabled?: boolean;
+  className?: string;
 }) {
-  const className = [
-    "px-2 py-1 rounded-md text-sm",
+  const cls = [
+    "px-2 py-1 rounded-md text-sm transition",
     active ? "bg-gray-100" : "hover:bg-gray-50",
     disabled ? "opacity-50 pointer-events-none" : "",
+    className,
   ].join(" ");
   return (
-    <Link href={href} onClick={onClick} className={className}>
+    <Link href={href} onClick={onClick} className={cls}>
       {children}
     </Link>
   );
@@ -45,12 +48,14 @@ export default function Header() {
   const pathname = usePathname();
   const router = useRouter();
   const [me, setMe] = useState<Me>(null);
-  const [menuOpen, setMenuOpen] = useState(false);
-  const [userMenuOpen, setUserMenuOpen] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false); // mobile
+  const [userMenuOpen, setUserMenuOpen] = useState(false); // desktop user dropdown
 
+  // načti přihlášeného + profil/roli
   useEffect(() => {
     let mounted = true;
-    (async () => {
+
+    async function loadMe() {
       const { data: auth } = await supabase.auth.getUser();
       const uid = auth.user?.id;
       if (!uid) {
@@ -62,41 +67,48 @@ export default function Header() {
         .select("id, email, role, display_name, username, avatar_url")
         .eq("id", uid)
         .single();
-      if (mounted) {
-        setMe(
-          prof
-            ? {
-                id: prof.id,
-                email: (prof as any).email,
-                role: (prof as any).role || "author",
-                display_name: (prof as any).display_name,
-                username: (prof as any).username,
-                avatar_url: (prof as any).avatar_url,
-              }
-            : { id: uid, role: "reader" }
-        );
+      if (!mounted) return;
+      if (prof) {
+        setMe({
+          id: prof.id,
+          email: (prof as any).email,
+          role: ((prof as any).role as Role) || "author",
+          display_name: (prof as any).display_name,
+          username: (prof as any).username,
+          avatar_url: (prof as any).avatar_url,
+        });
+      } else {
+        setMe({ id: uid, role: "reader" });
       }
-    })();
+    }
+
+    loadMe();
+
+    // reaguj na změny auth stavu (login/logout)
+    const { data: sub } = supabase.auth.onAuthStateChange(() => {
+      loadMe();
+    });
+
     return () => {
       mounted = false;
+      sub.subscription.unsubscribe();
     };
   }, []);
 
-  async function signOut() {
-    await supabase.auth.signOut();
-    setMe(null);
-    setUserMenuOpen(false);
-    router.push("/");
-    router.refresh();
-  }
-
-  // uzavřít menu při navigaci
+  // zavři menu při změně trasy
   useEffect(() => {
     setMenuOpen(false);
     setUserMenuOpen(false);
   }, [pathname]);
 
   const isActive = (href: string) => pathname === href;
+
+  async function signOut() {
+    await supabase.auth.signOut();
+    setMe(null);
+    router.replace("/");
+    router.refresh();
+  }
 
   return (
     <header className="sticky top-0 z-40 bg-white/90 backdrop-blur border-b">
@@ -115,7 +127,7 @@ export default function Header() {
         <nav className="hidden md:flex items-center gap-1">
           <NavLink href="/" active={isActive("/")}>Domů</NavLink>
 
-          {/* pouze přihlášený */}
+          {/* jen přihlášený */}
           {me && (
             <NavLink href="/dashboard" active={isActive("/dashboard")}>
               Nový článek
@@ -129,14 +141,19 @@ export default function Header() {
             </NavLink>
           )}
 
-          {/* nepřihlášený */}
+          {/* host: registrace + login */}
           {!me && (
-            <NavLink href="/login" active={isActive("/login")}>
-              Přihlášení
-            </NavLink>
+            <>
+              <NavLink href="/register" active={isActive("/register")}>
+                Registrace
+              </NavLink>
+              <NavLink href="/login" active={isActive("/login")}>
+                Přihlášení
+              </NavLink>
+            </>
           )}
 
-          {/* přihlášený: profil + odhlásit */}
+          {/* přihlášený: profil + odhlásit (dropdown) */}
           {me && (
             <div className="relative">
               <button
@@ -168,7 +185,7 @@ export default function Header() {
 
               {userMenuOpen && (
                 <div
-                  className="absolute right-0 mt-2 w-44 rounded-md border bg-white shadow-lg"
+                  className="absolute right-0 mt-2 w-48 rounded-md border bg-white shadow-lg overflow-hidden"
                   role="menu"
                 >
                   <Link
@@ -177,6 +194,13 @@ export default function Header() {
                     role="menuitem"
                   >
                     Profil
+                  </Link>
+                  <Link
+                    href="/account/delete"
+                    className="block px-3 py-2 text-sm hover:bg-gray-50"
+                    role="menuitem"
+                  >
+                    Smazat účet
                   </Link>
                   <button
                     onClick={signOut}
@@ -191,22 +215,29 @@ export default function Header() {
           )}
         </nav>
 
-        {/* Mobile: right controls */}
+        {/* Mobile controls (pravá strana) */}
         <div className="md:hidden flex items-center gap-2">
           {!me ? (
-            <Link
-              href="/login"
-              className="px-3 py-1.5 rounded-lg bg-brand-600 text-white text-sm"
-            >
-              Přihlášení
-            </Link>
+            <div className="flex items-center gap-2">
+              <Link
+                href="/register"
+                className="px-3 py-1.5 rounded-lg border text-sm"
+              >
+                Registrace
+              </Link>
+              <Link
+                href="/login"
+                className="px-3 py-1.5 rounded-lg bg-brand-600 text-white text-sm"
+              >
+                Přihlášení
+              </Link>
+            </div>
           ) : (
             <button
               onClick={() => setMenuOpen((v) => !v)}
               className="h-9 w-9 inline-flex items-center justify-center rounded-md border"
               aria-label="Menu"
             >
-              {/* hamburger */}
               <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor">
                 <path strokeWidth="2" d="M4 7h16M4 12h16M4 17h16" />
               </svg>
@@ -233,6 +264,9 @@ export default function Header() {
             <Link href="/profile" className="px-2 py-2 rounded-md hover:bg-gray-50">
               Profil
             </Link>
+            <Link href="/account/delete" className="px-2 py-2 rounded-md hover:bg-gray-50">
+              Smazat účet
+            </Link>
             <button
               onClick={signOut}
               className="text-left px-2 py-2 rounded-md hover:bg-gray-50"
@@ -245,3 +279,4 @@ export default function Header() {
     </header>
   );
 }
+```0
