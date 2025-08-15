@@ -283,4 +283,3 @@ export default function Header() {
     </header>
   );
 }
-```0
