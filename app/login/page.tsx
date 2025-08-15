@@ -1,5 +1,5 @@
 "use client";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 
@@ -7,39 +7,56 @@ export default function LoginPage() {
   const [email, setEmail] = useState("");
   const [sent, setSent] = useState(false);
   const [code, setCode] = useState("");
-  const [error, setError] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [cooldown, setCooldown] = useState(0);
   const router = useRouter();
 
-  async function sendCode(e: React.FormEvent) {
-    e.preventDefault();
-    setError(null);
+  useEffect(() => {
+    if (!sent || cooldown <= 0) return;
+    const t = setInterval(() => setCooldown((c) => (c > 0 ? c - 1 : 0)), 1000);
+    return () => clearInterval(t);
+  }, [sent, cooldown]);
+
+  async function sendCode() {
+    setErr(null);
     setLoading(true);
-
-    const { error } = await supabase.auth.signInWithOtp({
-      email,
-      options: { shouldCreateUser: false }, // jen přihlásit existující
-    });
-
+    const tryOnce = () =>
+      supabase.auth.signInWithOtp({
+        email,
+        options: { shouldCreateUser: false },
+      });
+    // jednoduchý retry na síťový výpadek
+    let error = null;
+    for (let i = 0; i < 2; i++) {
+      const { error: e } = await tryOnce();
+      if (!e) {
+        error = null;
+        break;
+      }
+      error = e;
+      await new Promise((r) => setTimeout(r, 600));
+    }
     setLoading(false);
-    if (error) setError(error.message);
-    else setSent(true);
+    if (error) setErr(error.message);
+    else {
+      setSent(true);
+      setCooldown(30);
+    }
   }
 
   async function verifyCode(e: React.FormEvent) {
     e.preventDefault();
-    setError(null);
+    setErr(null);
     setLoading(true);
-
     const { data, error } = await supabase.auth.verifyOtp({
       email,
       token: code,
       type: "email",
     });
-
     setLoading(false);
-    if (error) setError(error.message);
-    else if (data?.session) router.replace("/dashboard");
+    if (error) return setErr(error.message);
+    if (data?.session) router.replace("/dashboard");
   }
 
   return (
@@ -47,7 +64,7 @@ export default function LoginPage() {
       <h1 className="text-xl font-semibold mb-4">Přihlášení</h1>
 
       {!sent ? (
-        <form onSubmit={sendCode} className="space-y-3">
+        <div className="space-y-3">
           <input
             type="email"
             placeholder="tvuj@email.cz"
@@ -57,21 +74,21 @@ export default function LoginPage() {
             required
           />
           <button
+            onClick={sendCode}
+            disabled={loading || !email}
             className="px-3 py-2 rounded-lg bg-brand-600 text-white text-sm hover:bg-brand-500 disabled:opacity-50"
-            disabled={loading}
           >
-            Poslat kód
+            {loading ? "Posílám…" : "Poslat kód"}
           </button>
-          {error && <p className="text-sm text-red-600">{error}</p>}
+          {err && <p className="text-sm text-red-600">{err}</p>}
+          <p className="text-xs text-gray-500">Kód dorazí e-mailem (zkontroluj i spam).</p>
           <p className="text-xs text-gray-500">
-            Máš nový účet? <a href="/register" className="underline">Registruj se</a>.
+            Nemáš účet? <a href="/register" className="underline">Registruj se</a>.
           </p>
-        </form>
+        </div>
       ) : (
         <form onSubmit={verifyCode} className="space-y-3">
-          <p className="text-sm text-gray-600">
-            Kód jsme poslali na <b>{email}</b>.
-          </p>
+          <p className="text-sm text-gray-600">Kód jsme poslali na <b>{email}</b>.</p>
           <input
             inputMode="numeric"
             pattern="[0-9]*"
@@ -86,12 +103,25 @@ export default function LoginPage() {
             className="px-3 py-2 rounded-lg bg-brand-600 text-white text-sm hover:bg-brand-500 disabled:opacity-50"
             disabled={loading || code.length !== 6}
           >
-            Přihlásit
+            {loading ? "Ověřuji…" : "Přihlásit"}
           </button>
-          {error && <p className="text-sm text-red-600">{error}</p>}
+          <div className="text-xs text-gray-500">
+            Nepřišel kód?{" "}
+            <button
+              type="button"
+              onClick={sendCode}
+              disabled={cooldown > 0 || loading}
+              className="underline disabled:no-underline disabled:opacity-50"
+              aria-disabled={cooldown > 0}
+              title={cooldown > 0 ? `Počkej ${cooldown}s` : "Znovu poslat kód"}
+            >
+              Znovu poslat{cooldown > 0 ? ` (${cooldown}s)` : ""}
+            </button>
+          </div>
+          {err && <p className="text-sm text-red-600">{err}</p>}
           <button
             type="button"
-            onClick={() => setSent(false)}
+            onClick={() => { setSent(false); setCode(""); }}
             className="text-xs text-gray-500 underline"
           >
             Zadat jiný e-mail
