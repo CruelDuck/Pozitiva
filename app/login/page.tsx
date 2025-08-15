@@ -15,13 +15,12 @@ export default function LoginPage() {
     e.preventDefault();
     setError(null);
     setLoading(true);
+
     const { error } = await supabase.auth.signInWithOtp({
       email,
-      options: {
-        shouldCreateUser: true, // necháme nové uživatele projít
-        // captchaToken: "...", // pokud přidáš Turnstile i sem
-      },
+      options: { shouldCreateUser: false }, // jen přihlásit existující
     });
+
     setLoading(false);
     if (error) setError(error.message);
     else setSent(true);
@@ -31,12 +30,13 @@ export default function LoginPage() {
     e.preventDefault();
     setError(null);
     setLoading(true);
+
     const { data, error } = await supabase.auth.verifyOtp({
       email,
       token: code,
-      type: "email", // důležité: email OTP
-      // captchaToken: "...", // pokud použiješ Turnstile
+      type: "email",
     });
+
     setLoading(false);
     if (error) setError(error.message);
     else if (data?.session) router.replace("/dashboard");
@@ -63,11 +63,14 @@ export default function LoginPage() {
             Poslat kód
           </button>
           {error && <p className="text-sm text-red-600">{error}</p>}
+          <p className="text-xs text-gray-500">
+            Máš nový účet? <a href="/register" className="underline">Registruj se</a>.
+          </p>
         </form>
       ) : (
         <form onSubmit={verifyCode} className="space-y-3">
           <p className="text-sm text-gray-600">
-            Poslali jsme 6místný kód na <b>{email}</b>. Zadej ho níže:
+            Kód jsme poslali na <b>{email}</b>.
           </p>
           <input
             inputMode="numeric"
