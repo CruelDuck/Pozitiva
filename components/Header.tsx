@@ -25,10 +25,11 @@ export default function Header() {
       <div className="mx-auto max-w-5xl px-4 py-3 flex items-center justify-between">
         <Link href="/" className="font-semibold text-lg">Pozitivní Zprávy</Link>
         <nav className="flex items-center gap-1">
-          <NavLink href="/">Domů</NavLink>
-          <NavLink href="/dashboard">Dashboard</NavLink>
-          <NavLink href="/admin">Admin</NavLink>
-          <NavLink href="/login">Přihlášení</NavLink>
+  <NavLink href="/">Domů</NavLink>
+  <NavLink href="/dashboard">Dashboard</NavLink>
+  <NavLink href="/admin">Admin</NavLink>
+  <NavLink href="/profile">Profil</NavLink>
+  <NavLink href="/login">Přihlášení</NavLink>
         </nav>
       </div>
     </header>
