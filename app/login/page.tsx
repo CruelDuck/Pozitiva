@@ -1,47 +1,47 @@
 "use client";
-import { useState, useEffect } from "react";
-import { useRouter } from "next/navigation";
+import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
+import { useRouter } from "next/navigation";
+
+const SITE_URL =
+  process.env.NEXT_PUBLIC_SITE_URL ||
+  (typeof window !== "undefined" ? window.location.origin : "");
 
 export default function LoginPage() {
-  const [email, setEmail] = useState("");
-  const [sent, setSent] = useState(false);
-  const [code, setCode] = useState("");
-  const [err, setErr] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [cooldown, setCooldown] = useState(0);
   const router = useRouter();
+  const [email, setEmail] = useState("");
+  const [token, setToken] = useState("");
+  const [phase, setPhase] = useState<"ask" | "verify">("ask");
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!sent || cooldown <= 0) return;
-    const t = setInterval(() => setCooldown((c) => (c > 0 ? c - 1 : 0)), 1000);
-    return () => clearInterval(t);
-  }, [sent, cooldown]);
+    // Pokud už je session, pryč na dashboard
+    (async () => {
+      const { data } = await supabase.auth.getSession();
+      if (data.session) router.replace("/dashboard");
+    })();
+  }, [router]);
 
-  async function sendCode() {
+  async function sendCode(e: React.FormEvent) {
+    e.preventDefault();
     setErr(null);
     setLoading(true);
-    const tryOnce = () =>
-      supabase.auth.signInWithOtp({
+    try {
+      // Pošli OTP (kód do e-mailu), uživatele NEzakládej
+      const { error } = await supabase.auth.signInWithOtp({
         email,
-        options: { shouldCreateUser: false },
+        options: {
+          shouldCreateUser: false,
+          emailRedirectTo: `${SITE_URL}/auth/callback`, // fallback pro magic link
+        },
       });
-    // jednoduchý retry na síťový výpadek
-    let error = null;
-    for (let i = 0; i < 2; i++) {
-      const { error: e } = await tryOnce();
-      if (!e) {
-        error = null;
-        break;
-      }
-      error = e;
-      await new Promise((r) => setTimeout(r, 600));
-    }
-    setLoading(false);
-    if (error) setErr(error.message);
-    else {
-      setSent(true);
-      setCooldown(30);
+      if (error) throw error;
+      setPhase("verify");
+    } catch (e: any) {
+      setErr(e?.message || "Nepodařilo se odeslat kód.");
+    } finally {
+      setLoading(false);
     }
   }
 
@@ -49,82 +49,104 @@ export default function LoginPage() {
     e.preventDefault();
     setErr(null);
     setLoading(true);
-    const { data, error } = await supabase.auth.verifyOtp({
-      email,
-      token: code,
-      type: "email",
-    });
-    setLoading(false);
-    if (error) return setErr(error.message);
-    if (data?.session) router.replace("/dashboard");
+    try {
+      // Ověř 6místný kód
+      const { error } = await supabase.auth.verifyOtp({
+        email,
+        token,
+        type: "email", // login OTP
+      });
+      if (error) throw error;
+      router.replace("/dashboard");
+    } catch (e: any) {
+      setErr(e?.message || "Kód je neplatný nebo expiroval.");
+    } finally {
+      setLoading(false);
+    }
   }
 
   return (
-    <div className="max-w-md mx-auto bg-white border rounded-xl p-6">
-      <h1 className="text-xl font-semibold mb-4">Přihlášení</h1>
+    <div className="max-w-md mx-auto p-6 space-y-4">
+      <h1 className="text-2xl font-semibold">Přihlášení</h1>
 
-      {!sent ? (
-        <div className="space-y-3">
-          <input
-            type="email"
-            placeholder="tvuj@email.cz"
-            className="w-full border rounded-md p-2"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            required
-          />
+      {phase === "ask" && (
+        <form onSubmit={sendCode} className="space-y-3">
+          <label className="block">
+            <span className="text-sm text-gray-600">E-mail</span>
+            <input
+              type="email"
+              required
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              className="mt-1 w-full border rounded px-3 py-2"
+              placeholder="tvoje@adresa.cz"
+            />
+          </label>
+
+          {err && <div className="text-sm text-red-600">{err}</div>}
+
           <button
-            onClick={sendCode}
-            disabled={loading || !email}
-            className="px-3 py-2 rounded-lg bg-brand-600 text-white text-sm hover:bg-brand-500 disabled:opacity-50"
+            type="submit"
+            disabled={loading}
+            className="w-full bg-black text-white rounded px-4 py-2"
           >
-            {loading ? "Posílám…" : "Poslat kód"}
+            {loading ? "Posílám…" : "Poslat přihlašovací kód"}
           </button>
-          {err && <p className="text-sm text-red-600">{err}</p>}
-          <p className="text-xs text-gray-500">Kód dorazí e-mailem (zkontroluj i spam).</p>
+
           <p className="text-xs text-gray-500">
-            Nemáš účet? <a href="/register" className="underline">Registruj se</a>.
+            Tip: Otevři e-mail v prohlížeči, který používáš pro Pozitiva. Pokud
+            otevřeš odkaz v aplikaci e-mailu (in-app prohlížeč), přihlášení se
+            nemusí propsat do hlavního prohlížeče. Proto je tu i možnost zadat
+            6místný kód ručně.
           </p>
-        </div>
-      ) : (
+        </form>
+      )}
+
+      {phase === "verify" && (
         <form onSubmit={verifyCode} className="space-y-3">
-          <p className="text-sm text-gray-600">Kód jsme poslali na <b>{email}</b>.</p>
-          <input
-            inputMode="numeric"
-            pattern="[0-9]*"
-            maxLength={6}
-            placeholder="••••••"
-            className="w-full tracking-widest text-center text-xl border rounded-md p-3"
-            value={code}
-            onChange={(e) => setCode(e.target.value.replace(/\D/g, ""))}
-            required
-          />
-          <button
-            className="px-3 py-2 rounded-lg bg-brand-600 text-white text-sm hover:bg-brand-500 disabled:opacity-50"
-            disabled={loading || code.length !== 6}
-          >
-            {loading ? "Ověřuji…" : "Přihlásit"}
-          </button>
-          <div className="text-xs text-gray-500">
-            Nepřišel kód?{" "}
+          <div className="text-sm text-gray-700">
+            Na <b>{email}</b> jsme poslali 6místný kód. Zadej ho níže.
+          </div>
+
+          <label className="block">
+            <span className="text-sm text-gray-600">Kód z e-mailu</span>
+            <input
+              inputMode="numeric"
+              pattern="[0-9]*"
+              maxLength={6}
+              required
+              value={token}
+              onChange={(e) => setToken(e.target.value.replace(/\D/g, ""))}
+              className="mt-1 w-full border rounded px-3 py-2 tracking-widest text-center"
+              placeholder="123456"
+            />
+          </label>
+
+          {err && <div className="text-sm text-red-600">{err}</div>}
+
+          <div className="flex gap-2">
+            <button
+              type="submit"
+              disabled={loading}
+              className="flex-1 bg-black text-white rounded px-4 py-2"
+            >
+              {loading ? "Ověřuji…" : "Ověřit kód"}
+            </button>
             <button
               type="button"
-              onClick={sendCode}
-              disabled={cooldown > 0 || loading}
-              className="underline disabled:no-underline disabled:opacity-50"
-              aria-disabled={cooldown > 0}
-              title={cooldown > 0 ? `Počkej ${cooldown}s` : "Znovu poslat kód"}
+              onClick={() => setPhase("ask")}
+              className="px-4 py-2 rounded border"
             >
-              Znovu poslat{cooldown > 0 ? ` (${cooldown}s)` : ""}
+              Změnit e-mail
             </button>
           </div>
-          {err && <p className="text-sm text-red-600">{err}</p>}
+
           <button
             type="button"
-            onClick={() => { setSent(false); setCode(""); }}
-            className="text-xs text-gray-500 underline"
+            onClick={sendCode}
+            className="text-sm text-gray-600 underline"
           >
-            Zadat jiný e-mail
+            Poslat kód znovu
           </button>
         </form>
       )}
