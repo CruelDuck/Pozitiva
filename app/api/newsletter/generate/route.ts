@@ -1,11 +1,11 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 
-/** Vytvoří krátký výtah z HTML obsahu bez složitých regexů */
+/** Krátký výtah z HTML bez složitých regexů (odolné vůči copy-paste z mobilu) */
 function makeExcerpt(html?: string, max = 180) {
   if (!html) return "";
   const text = html
-    .replace(/<[^>]*>/g, " ")             // odstraň všechny HTML tagy
+    .replace(/<[^>]*>/g, " ")             // pryč tagy
     .replace(/&nbsp;|&#160;/gi, " ")      // NBSP
     .replace(/&amp;/gi, "&")
     .replace(/&lt;/gi, "<")
@@ -16,11 +16,11 @@ function makeExcerpt(html?: string, max = 180) {
 }
 
 /** Získá poslední publikované články – funguje s is_published i status='published' */
-async function fetchPosts(supabase: ReturnType<typeof createClient>, sinceISO: string) {
-  let select = "id,title,slug,content,published_at,source_url";
+async function fetchPosts(sb: any, sinceISO: string) {
+  const select = "id,title,slug,content,published_at,source_url";
 
   // 1) is_published = true
-  let { data, error } = await supabase
+  let { data, error } = await sb
     .from("posts")
     .select(select)
     .gte("published_at", sinceISO)
@@ -31,7 +31,7 @@ async function fetchPosts(supabase: ReturnType<typeof createClient>, sinceISO: s
   if (!error) return { data: data ?? [], used: { publishedBy: "is_published", select } };
 
   // 2) fallback: status = 'published'
-  const { data: d2, error: e2 } = await supabase
+  const { data: d2, error: e2 } = await sb
     .from("posts")
     .select(select)
     .gte("published_at", sinceISO)
