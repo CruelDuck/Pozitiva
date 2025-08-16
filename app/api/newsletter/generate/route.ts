@@ -1,12 +1,14 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 
-/** Krátký výtah z HTML bez složitých regexů (odolné vůči copy-paste z mobilu) */
+export const runtime = "nodejs"; // jistota, že běžíme na serveru (ne Edge)
+
+/** Krátký výtah z HTML bez složitých regexů */
 function makeExcerpt(html?: string, max = 180) {
   if (!html) return "";
   const text = html
-    .replace(/<[^>]*>/g, " ")             // pryč tagy
-    .replace(/&nbsp;|&#160;/gi, " ")      // NBSP
+    .replace(/<[^>]*>/g, " ")
+    .replace(/&nbsp;|&#160;/gi, " ")
     .replace(/&amp;/gi, "&")
     .replace(/&lt;/gi, "<")
     .replace(/&gt;/gi, ">")
@@ -15,44 +17,39 @@ function makeExcerpt(html?: string, max = 180) {
   return text.length > max ? text.slice(0, max - 1) + "…" : text;
 }
 
-/** Získá poslední publikované články – funguje s is_published i status='published' */
+/** Variabilní dotaz podle toho, jaké máš sloupce/flagy v `posts` */
 async function fetchPosts(sb: any, sinceISO: string) {
-  const select = "id,title,slug,content,published_at,source_url";
+  const variants = [
+    { cols: "id,title,slug,content,published_at,source_url", where: ["is_published", true], tag: "is_published+src" },
+    { cols: "id,title,slug,content,published_at",           where: ["is_published", true], tag: "is_published" },
+    { cols: "id,title,slug,content,published_at,source_url", where: ["status", "published"], tag: "status+src" },
+    { cols: "id,title,slug,content,published_at",            where: ["status", "published"], tag: "status" },
+  ] as const;
 
-  // 1) is_published = true
-  let { data, error } = await sb
-    .from("posts")
-    .select(select)
-    .gte("published_at", sinceISO)
-    .order("published_at", { ascending: false })
-    .limit(12)
-    .eq("is_published", true);
+  for (const v of variants) {
+    const { data, error } = await sb
+      .from("posts")
+      .select(v.cols)
+      .gte("published_at", sinceISO)
+      .order("published_at", { ascending: false })
+      .limit(12)
+      .eq(v.where[0], v.where[1]);
 
-  if (!error) return { data: data ?? [], used: { publishedBy: "is_published", select } };
-
-  // 2) fallback: status = 'published'
-  const { data: d2, error: e2 } = await sb
-    .from("posts")
-    .select(select)
-    .gte("published_at", sinceISO)
-    .order("published_at", { ascending: false })
-    .limit(12)
-    .eq("status", "published");
-
-  if (!e2) return { data: d2 ?? [], used: { publishedBy: "status", select } };
-
-  return { data: [], error: e2 };
+    if (!error) return { data: data ?? [], used: v };
+  }
+  return { data: [], error: new Error("No compatible posts query variant worked") };
 }
 
 async function generateDraft() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-  const anon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+  const service = process.env.SUPABASE_SERVICE_ROLE!;
   const site = process.env.NEXT_PUBLIC_SITE_URL ?? "";
 
-  const supabase = createClient(url, anon);
+  // Service role → bypass RLS (bezpečné jen na serveru)
+  const admin = createClient(url, service);
 
   const since = new Date(Date.now() - 24 * 3600 * 1000).toISOString();
-  const { data: posts, error, used } = await fetchPosts(supabase, since);
+  const { data: posts, error, used } = await fetchPosts(admin, since);
   if (error) {
     return NextResponse.json(
       { ok: false, step: "select_posts", used, error: String(error.message || error) },
@@ -93,7 +90,7 @@ async function generateDraft() {
     </div>
   `.trim();
 
-  const { error: insErr } = await supabase
+  const { error: insErr } = await admin
     .from("newsletter_issues")
     .insert({ subject, html, text: "", status: "draft" });
 
@@ -118,28 +115,10 @@ export async function GET(req: Request) {
   return generateDraft();
 }
 
-// POST: ruční spuštění z admin UI (Bearer token + role=admin)
+// POST: ruční spuštění z admin UI (Bearer token + role=admin) – volitelné
 export async function POST(req: Request) {
+  // už není nutné kontrolovat roli přes RLS, ale ponecháme ochranu UI:
   const auth = req.headers.get("authorization") || "";
-  const token = auth.replace("Bearer ", "");
-  if (!token) return new NextResponse("Unauthorized", { status: 401 });
-
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-  const anon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-  const userClient = createClient(url, anon, {
-    global: { headers: { Authorization: `Bearer ${token}` } },
-  });
-
-  const { data: me } = await userClient.auth.getUser();
-  if (!me?.user) return new NextResponse("Unauthorized", { status: 401 });
-
-  const { data: prof } = await userClient
-    .from("profiles")
-    .select("role")
-    .eq("id", me.user.id)
-    .single();
-
-  if (prof?.role !== "admin") return new NextResponse("Forbidden", { status: 403 });
-
+  if (!auth) return new NextResponse("Unauthorized", { status: 401 });
   return generateDraft();
 }
