@@ -4,18 +4,18 @@ import { supabase } from "@/lib/supabaseClient";
 import { useRouter } from "next/navigation";
 
 export default function AuthCallback() {
-  const [msg, setMsg] = useState("Zpracovávám přihlášení…");
+  const [msg, setMsg] = useState("Zpracovavam prihlaseni...");
   const router = useRouter();
 
   useEffect(() => {
     (async () => {
       try {
-        const { data, error } = await supabase.auth.exchangeCodeForSession(window.location.href);
+        const { error } = await supabase.auth.exchangeCodeForSession(window.location.href);
         if (error) {
-          setMsg("Nepodařilo se dokončit přihlášení: " + error.message);
+          setMsg("Nepodarilo se dokoncit prihlaseni: " + error.message);
           return;
         }
-        setMsg("Hotovo. Přesměrovávám…");
+        setMsg("Hotovo. Presmerovavam...");
         router.replace("/dashboard");
       } catch (e: any) {
         setMsg("Chyba: " + String(e?.message || e));
