@@ -7,27 +7,37 @@ const SITE_URL =
   process.env.NEXT_PUBLIC_SITE_URL ||
   (typeof window !== "undefined" ? window.location.origin : "");
 
+type Phase = "checking" | "logged" | "ask" | "verify";
+
 export default function LoginPage() {
   const router = useRouter();
   const [email, setEmail] = useState("");
   const [token, setToken] = useState("");
-  const [phase, setPhase] = useState<"ask" | "verify">("ask");
+  const [phase, setPhase] = useState<Phase>("checking");
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [hint, setHint] = useState<string | null>(null);
   const timedOut = useRef(false);
+  const [who, setWho] = useState<string | null>(null);
 
-  // když se session kdykoli objeví (třeba po kliknutí na e-mailový odkaz), přesměruj
   useEffect(() => {
-    const sub = supabase.auth.onAuthStateChange(async (_e, session) => {
-      if (session) router.replace("/dashboard");
+    const sub = supabase.auth.onAuthStateChange((_e, session) => {
+      if (session) {
+        setWho(session.user.email || null);
+        setPhase("logged");
+      }
     });
     (async () => {
       const { data } = await supabase.auth.getSession();
-      if (data.session) router.replace("/dashboard");
+      if (data.session) {
+        setWho(data.session.user.email || null);
+        setPhase("logged");
+      } else {
+        setPhase("ask");
+      }
     })();
     return () => sub.data.subscription.unsubscribe();
-  }, [router]);
+  }, []);
 
   async function sendCode(e: React.FormEvent) {
     e.preventDefault();
@@ -45,7 +55,7 @@ export default function LoginPage() {
       if (error) throw error;
       setPhase("verify");
     } catch (e: any) {
-      setErr(e?.message || "Nepodařilo se odeslat kód.");
+      setErr(e?.message || "Nepodarilo se odeslat kod.");
     } finally {
       setLoading(false);
     }
@@ -57,38 +67,26 @@ export default function LoginPage() {
     setHint(null);
     setLoading(true);
     timedOut.current = false;
-
-    // pojistka: po 10 s ukázat hint
     const t = setTimeout(() => {
       timedOut.current = true;
-      setHint(
-        "Ověření trvá déle než obvykle. Zkuste kliknout na odkaz v e-mailu (otevřete ho ve stejném prohlížeči), nebo kód pošlete a zadejte znovu."
-      );
+      setHint("Overeni trva dele. Zkuste kliknout na odkaz v e-mailu ve stejnem prohlizeci, nebo poslat kod znovu.");
       setLoading(false);
     }, 10000);
 
     try {
-      const { error } = await supabase.auth.verifyOtp({
-        email,
-        token,
-        type: "email",
-      });
+      const { error } = await supabase.auth.verifyOtp({ email, token, type: "email" });
       clearTimeout(t);
       if (error) throw error;
-
-      // pro jistotu ověř, že máme session
       const { data } = await supabase.auth.getSession();
       if (data.session) {
-        router.replace("/dashboard");
+        setWho(data.session.user.email || null);
+        setPhase("logged");
       } else {
-        setHint("Kód je ověřen, čekám na session… Pokud to visí, klikněte raději na odkaz v e-mailu.");
+        setHint("Kod prosiel, cekam na session... Kdyz to visi, pouzijte odkaz v e-mailu.");
       }
     } catch (e: any) {
       clearTimeout(t);
-      // pokud jsme už zobrazili hint kvůli timeoutu, nech ho — jinak ukaž chybu
-      if (!timedOut.current) {
-        setErr(e?.message || "Kód je neplatný nebo expiroval.");
-      }
+      if (!timedOut.current) setErr(e?.message || "Kod je neplatny nebo expiroval.");
       setLoading(false);
     }
   }
@@ -107,15 +105,34 @@ export default function LoginPage() {
       });
       if (error) throw error;
     } catch (e: any) {
-      setErr(e?.message || "Nepodařilo se znovu odeslat kód.");
+      setErr(e?.message || "Nepodarilo se znovu odeslat kod.");
     } finally {
       setLoading(false);
     }
   }
 
+  if (phase === "checking") return <div className="max-w-md mx-auto p-6">Nacitam...</div>;
+
+  if (phase === "logged") {
+    return (
+      <div className="max-w-md mx-auto p-6 space-y-4">
+        <h1 className="text-2xl font-semibold">Jste prihlasen</h1>
+        <div className="text-gray-700">{who ? `Uzivatel: ${who}` : null}</div>
+        <div className="flex gap-2">
+          <button onClick={() => router.replace("/dashboard")} className="px-4 py-2 rounded bg-black text-white">
+            Prejit na dashboard
+          </button>
+          <a href="/logout" className="px-4 py-2 rounded border inline-flex items-center">
+            Odhlasit
+          </a>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="max-w-md mx-auto p-6 space-y-4">
-      <h1 className="text-2xl font-semibold">Přihlášení</h1>
+      <h1 className="text-2xl font-semibold">Prihlaseni</h1>
 
       {phase === "ask" && (
         <form onSubmit={sendCode} className="space-y-3">
@@ -135,24 +152,21 @@ export default function LoginPage() {
           {hint && <div className="text-sm text-amber-700">{hint}</div>}
 
           <button type="submit" disabled={loading} className="w-full bg-black text-white rounded px-4 py-2">
-            {loading ? "Posílám…" : "Poslat přihlašovací kód"}
+            {loading ? "Posilam..." : "Poslat prihlasovaci kod"}
           </button>
 
           <p className="text-xs text-gray-500">
-            Tip: Pokud otevřete e-mail v in-app prohlížeči (uvnitř e-mailové aplikace),
-            přihlášení se nemusí propsat do hlavního prohlížeče. Proto je tu i zadání 6místného kódu.
+            Odkaz z e-mailu otevri ve stejnem prohlizeci, nebo pouzij 6mistny kod.
           </p>
         </form>
       )}
 
       {phase === "verify" && (
         <form onSubmit={verifyCode} className="space-y-3">
-          <div className="text-sm text-gray-700">
-            Kód jsme poslali na <b>{email}</b>.
-          </div>
+          <div className="text-sm text-gray-700">Kod jsme poslali na <b>{email}</b>.</div>
 
           <label className="block">
-            <span className="text-sm text-gray-600">Kód z e-mailu</span>
+            <span className="text-sm text-gray-600">Kod z e-mailu</span>
             <input
               inputMode="numeric"
               pattern="[0-9]*"
@@ -170,21 +184,17 @@ export default function LoginPage() {
 
           <div className="flex gap-2">
             <button type="submit" disabled={loading} className="flex-1 bg-green-600 text-white rounded px-4 py-2">
-              {loading ? "Ověřuji…" : "Ověřit kód"}
+              {loading ? "Overuji..." : "Overit kod"}
             </button>
             <button type="button" onClick={() => setPhase("ask")} className="px-4 py-2 rounded border">
-              Změnit e-mail
+              Zmenit e-mail
             </button>
           </div>
 
           <div className="flex items-center gap-2 text-sm">
-            <button type="button" onClick={resend} disabled={loading} className="underline">
-              Poslat kód znovu
-            </button>
+            <button type="button" onClick={resend} disabled={loading} className="underline">Poslat kod znovu</button>
             <span className="text-gray-500">•</span>
-            <a href={`${SITE_URL}/auth/callback`} className="underline">
-              Dokončit přes odkaz v e-mailu
-            </a>
+            <a href={`${SITE_URL}/auth/callback`} className="underline">Dokoncit pres odkaz v e-mailu</a>
           </div>
         </form>
       )}
