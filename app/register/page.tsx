@@ -22,14 +22,18 @@ export default function RegisterPage() {
     })();
   }, [router]);
 
+  // 1) Pošli OTP s vytvořením účtu (passwordless signup)
   async function sendSignup(e: React.FormEvent) {
     e.preventDefault();
     setErr(null);
     setLoading(true);
     try {
-      const { error } = await supabase.auth.signUp({
+      const { error } = await supabase.auth.signInWithOtp({
         email,
         options: {
+          // důležité: umožní založit nový účet, pokud neexistuje
+          shouldCreateUser: true,
+          // fallback pro magic-link – když na něj klikne, dokončí se přes /auth/callback
           emailRedirectTo: `${SITE_URL}/auth/callback`,
         },
       });
@@ -42,6 +46,7 @@ export default function RegisterPage() {
     }
   }
 
+  // 2) Ověř 6místný kód (pro passwordless je správný typ 'email')
   async function verifySignup(e: React.FormEvent) {
     e.preventDefault();
     setErr(null);
@@ -50,7 +55,7 @@ export default function RegisterPage() {
       const { error } = await supabase.auth.verifyOtp({
         email,
         token,
-        type: "signup", // důležité: typ 'signup'
+        type: "email",
       });
       if (error) throw error;
       router.replace("/dashboard");
@@ -90,9 +95,9 @@ export default function RegisterPage() {
           </button>
 
           <p className="text-xs text-gray-500">
-            Když otevřeš e-mail v in-app prohlížeči (uvnitř e-mailové aplikace),
-            přihlášení se nemusí propsat do hlavního prohlížeče. Proto je tu i
-            možnost zadat 6místný kód ručně.
+            Pokud otevřeš odkaz z e-mailu v in-app prohlížeči (uvnitř e-mailové
+            aplikace), přihlášení se nemusí propsat do hlavního prohlížeče.
+            Proto je tu i zadání 6místného kódu ručně.
           </p>
         </form>
       )}
