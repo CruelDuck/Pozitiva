@@ -1,20 +1,19 @@
 "use client";
 import { useEffect } from "react";
-import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
 
 export default function LogoutPage() {
-  const router = useRouter();
   useEffect(() => {
     (async () => {
-      await supabase.auth.signOut();
-      router.replace("/");
-      router.refresh();
+      try {
+        await supabase.auth.signOut();
+      } finally {
+        // vycisti i custom storage key, kdyby zbyl
+        try { localStorage.removeItem("pozitiva.auth"); } catch {}
+        window.location.href = "/";
+      }
     })();
-  }, [router]);
-  return (
-    <div className="max-w-md mx-auto p-6">
-      Odhlašuji…
-    </div>
-  );
+  }, []);
+
+  return <div className="max-w-md mx-auto p-6">Odhlašuji…</div>;
 }
