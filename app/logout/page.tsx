@@ -13,5 +13,5 @@ export default function LogoutPage() {
       }
     })();
   }, []);
-  return <div className="max-w-md mx-auto p-6">Odhlašuji…</div>;
+  return <div className="max-w-md mx-auto p-6">Odhlašuji...</div>;
 }
