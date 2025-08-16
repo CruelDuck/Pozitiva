@@ -87,3 +87,9 @@ export default async function HomePage() {
     </div>
   );
 }
+
+
+import CategoryBar from "@/components/CategoryBar";
+
+// … ve výstupu (např. hned pod hlavním <Header />)
+<CategoryBar />
