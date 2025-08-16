@@ -22,7 +22,6 @@ export default function RegisterPage() {
     })();
   }, [router]);
 
-  // 1) Pošli OTP s vytvořením účtu (passwordless signup)
   async function sendSignup(e: React.FormEvent) {
     e.preventDefault();
     setErr(null);
@@ -31,22 +30,19 @@ export default function RegisterPage() {
       const { error } = await supabase.auth.signInWithOtp({
         email,
         options: {
-          // důležité: umožní založit nový účet, pokud neexistuje
           shouldCreateUser: true,
-          // fallback pro magic-link – když na něj klikne, dokončí se přes /auth/callback
           emailRedirectTo: `${SITE_URL}/auth/callback`,
         },
       });
       if (error) throw error;
       setPhase("verify");
     } catch (e: any) {
-      setErr(e?.message || "Nepodařilo se odeslat kód.");
+      setErr(e?.message || "Nepodarilo se odeslat kod.");
     } finally {
       setLoading(false);
     }
   }
 
-  // 2) Ověř 6místný kód (pro passwordless je správný typ 'email')
   async function verifySignup(e: React.FormEvent) {
     e.preventDefault();
     setErr(null);
@@ -60,7 +56,7 @@ export default function RegisterPage() {
       if (error) throw error;
       router.replace("/dashboard");
     } catch (e: any) {
-      setErr(e?.message || "Kód je neplatný nebo expiroval.");
+      setErr(e?.message || "Kod je neplatny nebo expiroval.");
     } finally {
       setLoading(false);
     }
@@ -86,30 +82,16 @@ export default function RegisterPage() {
 
           {err && <div className="text-sm text-red-600">{err}</div>}
 
-          <button
-            type="submit"
-            disabled={loading}
-            className="w-full bg-black text-white rounded px-4 py-2"
-          >
-            {loading ? "Posílám…" : "Poslat registrační kód"}
+          <button type="submit" disabled={loading} className="w-full bg-black text-white rounded px-4 py-2">
+            {loading ? "Posilam..." : "Poslat registracni kod"}
           </button>
-
-          <p className="text-xs text-gray-500">
-            Pokud otevřeš odkaz z e-mailu v in-app prohlížeči (uvnitř e-mailové
-            aplikace), přihlášení se nemusí propsat do hlavního prohlížeče.
-            Proto je tu i zadání 6místného kódu ručně.
-          </p>
         </form>
       )}
 
       {phase === "verify" && (
         <form onSubmit={verifySignup} className="space-y-3">
-          <div className="text-sm text-gray-700">
-            Na <b>{email}</b> jsme poslali 6místný kód. Zadej ho níže.
-          </div>
-
           <label className="block">
-            <span className="text-sm text-gray-600">Kód z e-mailu</span>
+            <span className="text-sm text-gray-600">Kod z e-mailu</span>
             <input
               inputMode="numeric"
               pattern="[0-9]*"
@@ -124,29 +106,8 @@ export default function RegisterPage() {
 
           {err && <div className="text-sm text-red-600">{err}</div>}
 
-          <div className="flex gap-2">
-            <button
-              type="submit"
-              disabled={loading}
-              className="flex-1 bg-black text-white rounded px-4 py-2"
-            >
-              {loading ? "Ověřuji…" : "Ověřit kód"}
-            </button>
-            <button
-              type="button"
-              onClick={() => setPhase("ask")}
-              className="px-4 py-2 rounded border"
-            >
-              Změnit e-mail
-            </button>
-          </div>
-
-          <button
-            type="button"
-            onClick={sendSignup}
-            className="text-sm text-gray-600 underline"
-          >
-            Poslat kód znovu
+          <button type="submit" disabled={loading} className="w-full bg-green-600 text-white rounded px-4 py-2">
+            {loading ? "Overuji..." : "Overit kod"}
           </button>
         </form>
       )}
