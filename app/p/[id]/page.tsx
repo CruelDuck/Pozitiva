@@ -1,12 +1,12 @@
 'use client'
 import { useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabaseClient'
-export default function PostPage({ params }: { params: { idOrSlug: string } }) {
+export default function PostPage({ params }: { params: { id: string } }) {
   const [post, setPost] = useState<any>(null)
   const [sources, setSources] = useState<any[]>([])
   useEffect(() => {
     (async () => {
-      const slug = params.idOrSlug
+      const slug = params.id
       let p = null
       if (slug.length > 20) { const { data } = await supabase.from('posts').select('*').eq('id', slug).maybeSingle(); p = data }
       else { const { data } = await supabase.from('posts').select('*').eq('slug', slug).maybeSingle(); p = data }
@@ -15,7 +15,7 @@ export default function PostPage({ params }: { params: { idOrSlug: string } }) {
       const { data: srcs } = await supabase.from('post_sources').select('*').eq('post_id', p.id)
       setSources(srcs || [])
     })()
-  }, [params.idOrSlug])
+  }, [params.id])
   if (post === undefined) return <div>Příspěvek nenalezen.</div>
   if (!post) return <div>Načítám…</div>
   return (
