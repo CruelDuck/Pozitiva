@@ -1,253 +1,209 @@
-"use client";
-import { useEffect, useState } from "react";
-import { useParams, useRouter } from "next/navigation";
-import { supabase } from "@/lib/supabaseClient";
+'use client'
 
-type Post = {
-  id: string;
-  title: string;
-  excerpt: string | null;
-  content: string | null;
-  image_url: string | null;
-  is_published: boolean;
-  published_at: string | null;
-  author_id: string | null;
-};
-type Category = { id: number; name: string };
-type Source = { id?: number; title: string | null; url: string };
+import { useEffect, useState } from 'react'
+import { supabase } from '@/lib/supabaseClient'
 
-export default function ReviewPage() {
-  const { id } = useParams() as { id: string };
-  const router = useRouter();
-  const [role, setRole] = useState<string>("reader");
-  const [post, setPost] = useState<Post | null>(null);
-  const [categories, setCategories] = useState<Category[]>([]);
-  const [selectedCats, setSelectedCats] = useState<number[]>([]);
-  const [sources, setSources] = useState<Source[]>([{ title: null, url: "" }]);
-  const [saving, setSaving] = useState(false);
-  const [msg, setMsg] = useState<string | null>(null);
+export default function Review({ params }: { params: { id: string } }) {
+  const [p, setP] = useState<any>(null)
+  const [cats, setCats] = useState<any[]>([])
+  const [sel, setSel] = useState<number[]>([])
+  const [sources, setSources] = useState<any[]>([])
+  const [msg, setMsg] = useState<string | null>(null)
 
   useEffect(() => {
-    supabase.auth.getUser().then(async ({ data }) => {
-      if (!data.user) return;
-      const { data: prof } = await supabase.from("profiles").select("role").eq("id", data.user.id).single();
-      setRole(prof?.role || "reader");
-    });
-  }, []);
+    ;(async () => {
+      const { data } = await supabase.from('posts').select('*').eq('id', params.id).maybeSingle()
+      setP(data || undefined)
+      const { data: rels } = await supabase
+        .from('post_categories')
+        .select('category_id')
+        .eq('post_id', params.id)
+      setSel((rels || []).map((r: any) => r.category_id))
+      const { data: srcs } = await supabase.from('post_sources').select('*').eq('post_id', params.id)
+      setSources(srcs || [])
+      const { data: c } = await supabase
+        .from('categories')
+        .select('*')
+        .eq('is_active', true)
+        .order('sort_order', { ascending: true })
+      setCats(c || [])
+    })()
+  }, [params.id])
 
-  useEffect(() => {
-    async function load() {
-      // načti článek
-      const { data: p } = await supabase.from("posts").select("*").eq("id", id).single();
-      if (p) setPost(p as Post);
+  if (p === undefined) return <div>Článek nenalezen.</div>
+  if (!p) return <div>Načítám…</div>
 
-      // kategorie
-      const { data: cats } = await supabase.from("categories").select("*").order("name");
-      setCategories(cats || []);
-
-      // vybrané kategorie
-      const { data: pc } = await supabase
-        .from("post_categories")
-        .select("category_id")
-        .eq("post_id", id);
-      setSelectedCats((pc || []).map((r: any) => r.category_id));
-
-      // zdroje
-      const { data: src } = await supabase.from("post_sources").select("id, title, url").eq("post_id", id).order("id", { ascending: true });
-      setSources((src as any) && (src as any).length ? (src as any) : [{ title: null, url: "" }]);
+  const save = async () => {
+    setMsg(null)
+    const { error } = await supabase
+      .from('posts')
+      .update({
+        title: p.title,
+        excerpt: p.excerpt,
+        content: p.content,
+        image_url: p.image_url,
+        slug: p.slug,
+        image_credit: p.image_credit || null,
+        image_license: p.image_license || null,
+        image_source_url: p.image_source_url || null,
+      })
+      .eq('id', p.id)
+    if (error) {
+      setMsg(error.message)
+      return
     }
-    load();
-  }, [id]);
-
-  function toggleCat(cid: number) {
-    setSelectedCats((prev) => (prev.includes(cid) ? prev.filter((c) => c !== cid) : [...prev, cid]));
-  }
-
-  function setSource(i: number, key: "title" | "url", val: string) {
-    setSources((s) => s.map((it, idx) => (idx === i ? { ...it, [key]: val } : it)));
-  }
-  function addSource() {
-    setSources((s) => [...s, { title: null, url: "" }]);
-  }
-  function removeSource(i: number) {
-    setSources((s) => s.filter((_, idx) => idx !== i));
-  }
-
-  async function save() {
-    if (!post) return;
-    setSaving(true);
-    setMsg(null);
-    try {
-      // 1) update post
-      const { error: upErr } = await supabase
-        .from("posts")
-        .update({
-          title: post.title,
-          excerpt: post.excerpt,
-          content: post.content,
-          image_url: post.image_url,
-        })
-        .eq("id", post.id);
-      if (upErr) throw upErr;
-
-      // 2) kategorie – smaž staré, vlož nové
-      await supabase.from("post_categories").delete().eq("post_id", post.id);
-      if (selectedCats.length) {
-        await supabase.from("post_categories").insert(
-          selectedCats.map((cid) => ({ post_id: post.id, category_id: cid }))
-        );
-      }
-
-      // 3) zdroje – smaž vše a vlož aktuální (pro jednoduchost)
-      await supabase.from("post_sources").delete().eq("post_id", post.id);
-      const toInsert = sources.filter((s) => s.url && s.url.trim()).map((s) => ({
-        post_id: post.id,
-        title: s.title || null,
-        url: s.url.trim(),
-      }));
-      if (toInsert.length) await supabase.from("post_sources").insert(toInsert);
-
-      setMsg("Uloženo.");
-    } catch (e: any) {
-      setMsg(e.message || "Chyba ukládání");
-    } finally {
-      setSaving(false);
+    await supabase.from('post_categories').delete().eq('post_id', p.id)
+    if (sel.length) {
+      await supabase.from('post_categories').insert(sel.map((id) => ({ post_id: p.id, category_id: id })))
     }
-  }
-
-  async function publish() {
-    if (!post) return;
-    setSaving(true);
-    setMsg(null);
-    try {
-      const { error } = await supabase
-        .from("posts")
-        .update({ is_published: true, published_at: new Date().toISOString() })
-        .eq("id", post.id);
-      if (error) throw error;
-      setPost({ ...post, is_published: true, published_at: new Date().toISOString() });
-      setMsg("Publikováno.");
-    } catch (e: any) {
-      setMsg(e.message || "Chyba publikace");
-    } finally {
-      setSaving(false);
+    await supabase.from('post_sources').delete().eq('post_id', p.id)
+    if (sources.length) {
+      await supabase
+        .from('post_sources')
+        .insert(sources.map((s: any) => ({ post_id: p.id, title: s.title || null, url: s.url })))
     }
+    setMsg('Uloženo.')
   }
 
-  async function unpublish() {
-    if (!post) return;
-    setSaving(true);
-    setMsg(null);
-    try {
-      const { error } = await supabase
-        .from("posts")
-        .update({ is_published: false })
-        .eq("id", post.id);
-      if (error) throw error;
-      setPost({ ...post, is_published: false });
-      setMsg("Odepublikováno.");
-    } catch (e: any) {
-      setMsg(e.message || "Chyba");
-    } finally {
-      setSaving(false);
-    }
+  const publish = async (on: boolean) => {
+    const payload: any = { is_published: on }
+    if (on) payload.published_at = new Date().toISOString()
+    await supabase.from('posts').update(payload).eq('id', p.id)
+    setP((prev: any) => ({ ...prev, ...payload }))
   }
-
-  if (role !== "admin") return <div>Nemáte oprávnění.</div>;
-  if (!post) return <div>Načítání…</div>;
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-      <section className="bg-white border rounded-xl p-4 lg:col-span-2">
-        <h1 className="text-xl font-semibold mb-3">Recenze / Úpravy</h1>
-        <div className="space-y-3">
+    <div className="max-w-3xl mx-auto card p-6 space-y-4">
+      <h1 className="text-xl font-bold">Revize článku</h1>
+
+      <div>
+        <div className="label">Titulek</div>
+        <input className="input" value={p.title || ''} onChange={(e) => setP({ ...p, title: e.target.value })} />
+      </div>
+
+      <div>
+        <div className="label">Perex</div>
+        <textarea
+          className="input min-h-20"
+          value={p.excerpt || ''}
+          onChange={(e) => setP({ ...p, excerpt: e.target.value })}
+        />
+      </div>
+
+      <div>
+        <div className="label">Obsah</div>
+        <textarea
+          className="input min-h-40"
+          value={p.content || ''}
+          onChange={(e) => setP({ ...p, content: e.target.value })}
+        />
+      </div>
+
+      <div>
+        <div className="label">Obrázek URL</div>
+        <input
+          className="input"
+          value={p.image_url || ''}
+          onChange={(e) => setP({ ...p, image_url: e.target.value })}
+        />
+      </div>
+
+      <div className="grid sm:grid-cols-3 gap-2">
+        <div>
+          <div className="label">Autor/Zdroj obrázku</div>
           <input
-            className="w-full border rounded-md p-2"
-            value={post.title || ""}
-            onChange={(e) => setPost({ ...post, title: e.target.value })}
-          />
-          <input
-            className="w-full border rounded-md p-2"
-            placeholder="Krátký výtah"
-            value={post.excerpt || ""}
-            onChange={(e) => setPost({ ...post, excerpt: e.target.value })}
-          />
-          <textarea
-            className="w-full border rounded-md p-2"
-            rows={12}
-            placeholder="Obsah"
-            value={post.content || ""}
-            onChange={(e) => setPost({ ...post, content: e.target.value })}
-          />
-          <input
-            className="w-full border rounded-md p-2"
-            placeholder="URL obrázku"
-            value={post.image_url || ""}
-            onChange={(e) => setPost({ ...post, image_url: e.target.value })}
+            className="input"
+            value={p.image_credit || ''}
+            onChange={(e) => setP({ ...p, image_credit: e.target.value })}
           />
         </div>
-
-        <div className="mt-4 flex items-center gap-2">
-          <button onClick={save} disabled={saving} className="px-3 py-2 rounded-lg bg-gray-800 text-white text-sm">
-            Uložit
-          </button>
-          {!post.is_published ? (
-            <button onClick={publish} disabled={saving} className="px-3 py-2 rounded-lg bg-brand-600 text-white text-sm">
-              Publikovat
-            </button>
-          ) : (
-            <button onClick={unpublish} disabled={saving} className="px-3 py-2 rounded-lg bg-red-600 text-white text-sm">
-              Odepublikovat
-            </button>
-          )}
-          {msg && <span className="text-sm">{msg}</span>}
+        <div>
+          <div className="label">Licence</div>
+          <input
+            className="input"
+            value={p.image_license || ''}
+            onChange={(e) => setP({ ...p, image_license: e.target.value })}
+          />
         </div>
-      </section>
+        <div>
+          <div className="label">URL původu</div>
+          <input
+            className="input"
+            value={p.image_source_url || ''}
+            onChange={(e) => setP({ ...p, image_source_url: e.target.value })}
+          />
+        </div>
+      </div>
 
-      <aside className="bg-white border rounded-xl p-4">
-        <h3 className="font-semibold mb-2">Kategorie</h3>
-        <div className="space-y-1">
-          {categories.map((c) => (
-            <label key={c.id} className="flex items-center gap-2 text-sm">
-              <input
-                type="checkbox"
-                checked={selectedCats.includes(c.id)}
-                onChange={() => toggleCat(c.id)}
-              />
+      <div>
+        <div className="label">Kategorie</div>
+        <select
+          className="input"
+          multiple
+          value={sel.map(String)}
+          onChange={(e) => {
+            const opts = Array.from(e.target.selectedOptions).map((o) => Number(o.value))
+            setSel(opts)
+          }}
+        >
+          {cats.map((c) => (
+            <option key={c.id} value={String(c.id)}>
               {c.name}
-            </label>
+            </option>
           ))}
-          {categories.length === 0 && <p className="text-sm text-gray-500">Nejsou založené kategorie.</p>}
-        </div>
+        </select>
+        <div className="text-xs text-zinc-500 mt-1">Podrž Ctrl/Cmd pro výběr více kategorií.</div>
+      </div>
 
-        <h3 className="font-semibold mt-6 mb-2">Zdroje</h3>
-        <div className="space-y-2">
-          {sources.map((s, i) => (
-            <div key={i} className="grid grid-cols-1 gap-2">
-              <input
-                className="border rounded-md p-2"
-                placeholder="Název (volitelné)"
-                value={s.title || ""}
-                onChange={(e) => setSource(i, "title", e.target.value)}
-              />
-              <input
-                className="border rounded-md p-2"
-                placeholder="URL"
-                value={s.url}
-                onChange={(e) => setSource(i, "url", e.target.value)}
-              />
-              {sources.length > 1 && (
-                <button type="button" onClick={() => removeSource(i)} className="text-xs underline text-red-600">
-                  Odebrat
-                </button>
-              )}
-            </div>
-          ))}
-          <button type="button" onClick={addSource} className="text-sm underline">
+      <div>
+        <div className="label">Zdroje</div>
+        {sources.map((s: any, idx: number) => (
+          <div key={idx} className="grid sm:grid-cols-2 gap-2 mb-2">
+            <input
+              className="input"
+              placeholder="Název"
+              value={s.title || ''}
+              onChange={(e) =>
+                setSources((prev) => prev.map((x: any, i: number) => (i === idx ? { ...x, title: e.target.value } : x)))
+              }
+            />
+            <input
+              className="input"
+              placeholder="URL"
+              value={s.url || ''}
+              onChange={(e) =>
+                setSources((prev) => prev.map((x: any, i: number) => (i === idx ? { ...x, url: e.target.value } : x)))
+              }
+            />
+          </div>
+        ))}
+        <div className="flex gap-2">
+          <button className="btn" onClick={() => setSources((prev) => [...prev, { title: '', url: '' }])}>
             Přidat zdroj
           </button>
+          {sources.length > 0 && (
+            <button className="btn" onClick={() => setSources((prev) => prev.slice(0, -1))}>
+              Odebrat poslední
+            </button>
+          )}
         </div>
-      </aside>
+      </div>
+
+      <div className="flex gap-2">
+        <button className="btn" onClick={save}>
+          Uložit
+        </button>
+        {!p.is_published ? (
+          <button className="btn" onClick={() => publish(true)}>
+            Publikovat
+          </button>
+        ) : (
+          <button className="btn" onClick={() => publish(false)}>
+            Odepublikovat
+          </button>
+        )}
+      </div>
+      {msg && <div className="text-sm text-zinc-600">{msg}</div>}
     </div>
-  );
+  )
 }
