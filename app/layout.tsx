@@ -8,12 +8,12 @@ const inter = Inter({ subsets: ["latin"], display: "swap" });
 
 export const metadata: Metadata = {
   title: "Pozitiva",
-  description: "Pozitivni zpravy – hezke novinky kazdy den.",
+  description: "Pozitivní zprávy – hezké novinky každý den.",
   metadataBase: new URL(process.env.NEXT_PUBLIC_SITE_URL || "https://pozitiva.vercel.app"),
   icons: { icon: "/favicon.ico" },
   openGraph: {
     title: "Pozitiva",
-    description: "Pozitivni zpravy – hezke novinky kazdy den.",
+    description: "Pozitivní zprávy – hezké novinky každý den.",
     url: process.env.NEXT_PUBLIC_SITE_URL || "https://pozitiva.vercel.app",
     siteName: "Pozitiva",
     type: "website",
@@ -21,7 +21,7 @@ export const metadata: Metadata = {
   twitter: {
     card: "summary_large_image",
     title: "Pozitiva",
-    description: "Pozitivni zpravy – hezke novinky kazdy den.",
+    description: "Pozitivní zprávy – hezké novinky každý den.",
   },
 };
 
@@ -38,7 +38,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           </main>
           <footer className="border-t bg-white">
             <div className="mx-auto max-w-5xl w-full px-4 py-6 text-sm text-gray-600">
-              © {new Date().getFullYear()} Pozitivni Zpravy · Postaveno na Next.js &amp; Supabase
+              © {new Date().getFullYear()} Pozitivní Zprávy · Postaveno na Next.js &amp; Supabase
             </div>
           </footer>
         </AuthProvider>
