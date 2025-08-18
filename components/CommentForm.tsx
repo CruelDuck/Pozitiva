@@ -19,7 +19,7 @@ export default function CommentForm({ postId, parentId }: { postId: string; pare
   const [activeIndex, setActiveIndex] = useState(0);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
-  // captcha
+  // captcha 
   const siteKey = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY;
 
   useEffect(() => {
