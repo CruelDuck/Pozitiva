@@ -15,6 +15,7 @@ type PostRow = {
   published_at: string | null;
   is_published: boolean | null;
   image_url: string | null;
+  views: number | null;
 };
 
 type Author = { id: string; display_name: string | null };
@@ -40,7 +41,6 @@ function AdminInner() {
   const [q, setQ] = useState("");
   const [tab, setTab] = useState<"waiting" | "published" | "all">("waiting");
 
-  // načtení seznamu
   useEffect(() => {
     let cancelled = false;
 
@@ -49,9 +49,8 @@ function AdminInner() {
       setErr(null);
 
       const SELECT =
-        "id,title,slug,excerpt,author_id,created_at,published_at,is_published,image_url";
+        "id,title,slug,excerpt,author_id,created_at,published_at,is_published,image_url,views";
 
-      // preferovaná order sloupce
       const tryOrders = ["published_at", "created_at", "id"];
       let data: PostRow[] | null = null;
       let lastError: any = null;
@@ -131,7 +130,7 @@ function AdminInner() {
     setLoading(true);
     setErr(null);
     const SELECT =
-      "id,title,slug,excerpt,author_id,created_at,published_at,is_published,image_url";
+      "id,title,slug,excerpt,author_id,created_at,published_at,is_published,image_url,views";
     const r = await supabase.from("posts").select(SELECT).limit(200);
     if (r.error || !r.data) {
       setErr(String(r.error?.message || "Načtení selhalo."));
@@ -183,14 +182,23 @@ function AdminInner() {
 
   return (
     <div className="space-y-5">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight">
-          Schvalování článků
-        </h1>
-        <p className="text-gray-600 mt-1">
-          Zde najdeš nové příspěvky, které čekají na publikaci. Otevři náhled,
-          případně uprav a klikni na <b>Publikovat</b>.
-        </p>
+      <div className="flex items-center gap-3">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight">
+            Administrace článků
+          </h1>
+          <p className="text-gray-600 mt-1">
+            Publikuj nové příspěvky, upravuj a sleduj zobrazení.
+          </p>
+        </div>
+        <div className="ml-auto">
+          <Link
+            href="/admin/comments"
+            className="px-3 py-2 text-sm rounded-lg border bg-white hover:bg-gray-50"
+          >
+            Komentáře →
+          </Link>
+        </div>
       </div>
 
       <div className="flex flex-wrap items-center gap-2">
@@ -203,8 +211,6 @@ function AdminInner() {
           >
             Čekající
           </button>
-        </div>
-        <div className="inline-flex rounded-lg border bg-white overflow-hidden">
           <button
             onClick={() => setTab("published")}
             className={`px-3 py-1.5 text-sm ${
@@ -213,8 +219,6 @@ function AdminInner() {
           >
             Publikované
           </button>
-        </div>
-        <div className="inline-flex rounded-lg border bg-white overflow-hidden">
           <button
             onClick={() => setTab("all")}
             className={`px-3 py-1.5 text-sm ${
@@ -249,19 +253,20 @@ function AdminInner() {
               <th className="text-left font-medium px-3 py-2">Autor</th>
               <th className="text-left font-medium px-3 py-2">Stav</th>
               <th className="text-left font-medium px-3 py-2">Publikováno</th>
+              <th className="text-left font-medium px-3 py-2">Zobrazení</th>
               <th className="text-left font-medium px-3 py-2">Akce</th>
             </tr>
           </thead>
           <tbody>
             {loading ? (
               <tr>
-                <td className="px-3 py-4" colSpan={5}>
+                <td className="px-3 py-4" colSpan={6}>
                   Načítám…
                 </td>
               </tr>
             ) : filtered.length === 0 ? (
               <tr>
-                <td className="px-3 py-4" colSpan={5}>
+                <td className="px-3 py-4" colSpan={6}>
                   Nic k zobrazení.
                 </td>
               </tr>
@@ -274,7 +279,9 @@ function AdminInner() {
                 return (
                   <tr key={p.id} className="border-t">
                     <td className="px-3 py-3 align-top">
-                      <div className="font-medium">{p.title || "Bez názvu"}</div>
+                      <div className="font-medium">
+                        {p.title || "Bez názvu"}
+                      </div>
                       {p.excerpt ? (
                         <div className="text-gray-600 line-clamp-2">
                           {p.excerpt}
@@ -287,6 +294,9 @@ function AdminInner() {
                       {p.published_at
                         ? new Date(p.published_at).toLocaleString("cs-CZ")
                         : "—"}
+                    </td>
+                    <td className="px-3 py-3 align-top">
+                      {typeof p.views === "number" ? p.views : 0}
                     </td>
                     <td className="px-3 py-3 align-top">
                       <div className="flex flex-wrap gap-2">
@@ -334,12 +344,6 @@ function AdminInner() {
           </tbody>
         </table>
       </div>
-
-      <p className="text-xs text-gray-500">
-        Pozn.: Tato verze používá pouze sloupce, které jsou ve schématu („is_published“ a
-        „published_at“). Pokud chceš workflow se sloupcem <code>status</code> nebo
-        „skrytím“, můžu ti dát SQL migraci a UI na míru.
-      </p>
     </div>
   );
 }
