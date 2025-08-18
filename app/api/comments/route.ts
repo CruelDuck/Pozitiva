@@ -13,12 +13,11 @@ type Body = {
   postId: string
   content: string
   turnstileToken?: string
-  // optional: ip passed from client (not required)
 }
 
 async function verifyTurnstile(token?: string, ip?: string | null) {
   const secret = process.env.TURNSTILE_SECRET_KEY
-  if (!secret) return { ok: true } // pokud nechceš blokovat při dev
+  if (!secret) return { ok: true } // v dev režimu neblokuj
   if (!token) return { ok: false, error: 'Chybí ověření (captcha).' }
 
   const form = new URLSearchParams()
@@ -54,10 +53,9 @@ export async function POST(req: Request) {
     const v = await verifyTurnstile(turnstileToken, ip)
     if (!v.ok) return NextResponse.json({ error: v.error }, { status: 400 })
 
-    // ověření uživatele – použijeme Supabase JWT z cookie/hlavičky
-    // tady použijeme anon client se service role na INSERT s vynucením user_id
-    const authHeader = req.headers.get('authorization') // např. "Bearer <token>"
-    const { data: userInfo } = await fetchUserFromAuthHeader(authHeader)
+    // Získáme user id z Authorization: Bearer <jwt>
+    const authHeader = req.headers.get('authorization')
+    const userInfo = await fetchUserFromAuthHeader(authHeader)
     if (!userInfo?.id) {
       return NextResponse.json({ error: 'Nejsi přihlášen.' }, { status: 401 })
     }
@@ -77,20 +75,16 @@ export async function POST(req: Request) {
 }
 
 /**
- * Pomocná funkce: vyčteme user_id z Authorization Bearer tokenu (Supabase JWT).
- * Pokud posíláš požadavek z clientu bez hlavičky, přepni na jednodušší variantu:
- *  - z frontendu si vytáhni supabase.auth.getUser() a pošli user.id v body (méně bezpečné).
+ * Vyčte user_id (sub) z Bearer JWT bez síťového volání.
+ * Vrací objekt { id: string | null }.
  */
-async function fetchUserFromAuthHeader(authHeader: string | null) {
+async function fetchUserFromAuthHeader(authHeader: string | null): Promise<{ id: string | null }> {
   try {
     if (!authHeader?.toLowerCase().startsWith('bearer ')) return { id: null }
     const jwt = authHeader.split(' ')[1]
-    // Supabase admin endpoint pro verifikaci (neexistuje veřejné JWT verify),
-    // proto použijeme jednoduché dekódování JWT a vytáhneme sub (user id).
-    const payload = JSON.parse(
-      Buffer.from(jwt.split('.')[1] || '', 'base64').toString('utf8')
-    )
-    return { id: payload?.sub || null }
+    const payloadStr = Buffer.from((jwt.split('.')[1] || ''), 'base64').toString('utf8')
+    const payload = JSON.parse(payloadStr)
+    return { id: (payload?.sub as string) || null }
   } catch {
     return { id: null }
   }
