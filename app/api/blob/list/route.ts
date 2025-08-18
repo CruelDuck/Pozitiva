@@ -4,6 +4,7 @@ import { list } from '@vercel/blob'
 
 export const runtime = 'nodejs' // stabilní runtime
 
+
 export async function GET() {
   try {
     const { blobs } = await list()
