@@ -48,7 +48,16 @@ export async function POST(req: Request) {
     if (content.length > 5000) {
       return NextResponse.json({ error: 'Komentář je příliš dlouhý.' }, { status: 400 })
     }
+    
+const resp = await fetch("https://challenges.cloudflare.com/turnstile/v0/siteverify", {
+  method: "POST",
+  headers: { "Content-Type": "application/x-www-form-urlencoded" },
+  body: `secret=${process.env.TURNSTILE_SECRET_KEY}&response=${req.body.turnstileToken}`,
+});
+const data = await resp.json();
+if (!data.success) return res.status(400).send("Chybí ověření (captcha).");
 
+    
     const ip = (req.headers.get('x-forwarded-for') || '').split(',')[0] || null
     const v = await verifyTurnstile(turnstileToken, ip)
     if (!v.ok) return NextResponse.json({ error: v.error }, { status: 400 })
