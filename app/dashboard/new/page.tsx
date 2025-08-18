@@ -4,127 +4,186 @@ import { useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabaseClient'
 
 type SourceRow = { title: string; url: string }
+type Category = { id: string; title: string | null; slug: string | null }
 
 export default function NewPostPage() {
+  // texty
   const [title, setTitle] = useState('')
   const [excerpt, setExcerpt] = useState('')
   const [content, setContent] = useState('')
-  const [cats, setCats] = useState<any[]>([])
-  const [sel, setSel] = useState<number[]>([])
+
+  // obrázek + práva
   const [img, setImg] = useState('')
   const [imageCredit, setImageCredit] = useState('')
   const [imageLicense, setImageLicense] = useState('')
   const [imageSourceUrl, setImageSourceUrl] = useState('')
+
+  // kategorie (UUID!)
+  const [cats, setCats] = useState<Category[]>([])
+  const [sel, setSel] = useState<string[]>([]) // vybrané UUID
+
+  // zdroje
   const [sources, setSources] = useState<SourceRow[]>([{ title: '', url: '' }])
-  const [msg, setMsg] = useState<string | null>(null)
+
+  // galerie
   const [gallery, setGallery] = useState<any[] | null>(null)
   const [showGallery, setShowGallery] = useState(false)
 
+  // UX
+  const [msg, setMsg] = useState<string | null>(null)
+  const [err, setErr] = useState<string | null>(null)
+  const [submitting, setSubmitting] = useState(false)
+
+  // načíst kategorie
   useEffect(() => {
-    supabase
-      .from('categories')
-      .select('*')
-      .eq('is_active', true)
-      .order('sort_order', { ascending: true })
-      .then(({ data }) => setCats(data || []))
+    ;(async () => {
+      const { data, error } = await supabase
+        .from('categories')
+        .select('id,title,slug')
+        .order('title', { ascending: true })
+      if (!error && data) setCats(data as Category[])
+    })()
   }, [])
 
+  // upload do Blob/Storage (zajištěno /api/upload)
   const upload = async (file: File) => {
+    setErr(null); setMsg(null)
     const res = await fetch('/api/upload?filename=' + encodeURIComponent(file.name), {
       method: 'POST',
       body: file,
     })
     const data = await res.json()
-    if (data.url) setImg(data.url)
+    if (!res.ok || !data?.url) {
+      setErr(data?.error || 'Nahrávání selhalo')
+      return
+    }
+    setImg(data.url)
+    setMsg('Obrázek nahrán')
   }
 
+  // otevřít galerii
   const openGallery = async () => {
     setShowGallery(true)
     if (gallery === null) {
       const res = await fetch('/api/blob/list')
       const data = await res.json()
       setGallery(data.items || [])
+      if (data?.error) setErr('Galerie: ' + data.error)
     }
   }
 
+  // uložení konceptu
   const submit = async () => {
-    setMsg(null)
-    const {
-      data: { user },
-    } = await supabase.auth.getUser()
-    if (!user) {
-      setMsg('Musíš být přihlášen.')
-      return
+    setErr(null); setMsg(null); setSubmitting(true)
+    try {
+      const { data: auth } = await supabase.auth.getUser()
+      const user = auth?.user
+      if (!user) {
+        setErr('Musíš být přihlášen.')
+        return
+      }
+
+      // vlož příspěvek
+      const { data: inserted, error: e1 } = await supabase
+        .from('posts')
+        .insert({
+          author_id: user.id,
+          title,
+          excerpt: excerpt || null,
+          content,
+          image_url: img || null,
+          image_credit: imageCredit || null,
+          image_license: imageLicense || null,
+          image_source_url: imageSourceUrl || null,
+          is_published: false,
+        })
+        .select('id')
+        .single()
+
+      if (e1 || !inserted) {
+        setErr(e1?.message || 'Vkládání článku selhalo')
+        return
+      }
+      const pid = inserted.id as string
+
+      // kategorie (UUID) – pokud nějaké vybrané
+      if (sel.length) {
+        const rows = sel.map((id) => ({ post_id: pid, category_id: id }))
+        const insCats = await supabase.from('post_categories').insert(rows)
+        if (insCats.error) {
+          setErr('Ukládání kategorií selhalo: ' + insCats.error.message)
+          return
+        }
+      }
+
+      // zdroje (jen vyplněné URL)
+      const normSources = (sources || [])
+        .filter((s) => s.url?.trim())
+        .map((s) => ({ post_id: pid, title: s.title || null, url: s.url.trim() }))
+      if (normSources.length) {
+        const insSrc = await supabase.from('post_sources').insert(normSources)
+        if (insSrc.error) {
+          setErr('Ukládání zdrojů selhalo: ' + insSrc.error.message)
+          return
+        }
+      }
+
+      setMsg('Uloženo jako koncept.')
+      // reset formuláře
+      setTitle(''); setExcerpt(''); setContent('')
+      setImg(''); setImageCredit(''); setImageLicense(''); setImageSourceUrl('')
+      setSel([]); setSources([{ title: '', url: '' }])
+    } finally {
+      setSubmitting(false)
     }
-
-    const { data, error } = await supabase
-      .from('posts')
-      .insert({
-        author_id: user.id,
-        title,
-        excerpt: excerpt || null,
-        content,
-        image_url: img || null,
-        image_credit: imageCredit || null,
-        image_license: imageLicense || null,
-        image_source_url: imageSourceUrl || null,
-        is_published: false,
-      })
-      .select('id')
-      .single()
-
-    if (error) {
-      setMsg(error.message)
-      return
-    }
-
-    const pid = data.id
-
-    if (sel.length) {
-      await supabase.from('post_categories').insert(sel.map((id) => ({ post_id: pid, category_id: id })))
-    }
-
-    const normSources = (sources || [])
-      .filter((s) => s.url?.trim())
-      .map((s) => ({ post_id: pid, title: s.title || null, url: s.url.trim() }))
-    if (normSources.length) await supabase.from('post_sources').insert(normSources)
-
-    setMsg('Uloženo jako koncept.')
-    setTitle('')
-    setExcerpt('')
-    setContent('')
-    setSel([])
-    setImg('')
-    setImageCredit('')
-    setImageLicense('')
-    setImageSourceUrl('')
-    setSources([{ title: '', url: '' }])
   }
 
   return (
-    <div className="max-w-2xl mx-auto card p-6 space-y-4">
-      <h1 className="text-xl font-bold">Nový článek</h1>
+    <div className="mx-auto max-w-3xl space-y-6">
+      {/* HLAVIČKA */}
+      <section className="card p-5 space-y-3">
+        <h1 className="text-xl font-semibold">Nový článek</h1>
 
-      <div>
-        <div className="label">Titulek</div>
-        <input className="input" value={title} onChange={(e) => setTitle(e.target.value)} />
-      </div>
+        <div>
+          <label className="label">Titulek</label>
+          <input className="input" value={title} onChange={(e) => setTitle(e.target.value)} />
+        </div>
 
-      <div>
-        <div className="label">Perex</div>
-        <textarea className="input min-h-20" value={excerpt} onChange={(e) => setExcerpt(e.target.value)} />
-      </div>
+        <div>
+          <label className="label">Perex</label>
+          <textarea
+            className="input min-h-24"
+            value={excerpt}
+            onChange={(e) => setExcerpt(e.target.value)}
+          />
+        </div>
 
-      <div>
-        <div className="label">Obsah</div>
-        <textarea className="input min-h-40" value={content} onChange={(e) => setContent(e.target.value)} />
-      </div>
+        <div>
+          <label className="label">Obsah</label>
+          <textarea
+            className="input min-h-48"
+            value={content}
+            onChange={(e) => setContent(e.target.value)}
+          />
+        </div>
+      </section>
 
-      <div>
-        <div className="label">Obrázek</div>
+      {/* OBRÁZEK */}
+      <section className="card p-5 space-y-3">
+        <h2 className="font-semibold">Obrázek</h2>
+
         {img && <img src={img} className="w-full rounded-xl mb-2" />}
-        <div className="flex flex-wrap gap-2 items-center">
-          <input type="file" accept="image/*" onChange={(e) => e.target.files && upload(e.target.files[0])} />
+
+        <div className="flex flex-wrap gap-2">
+          <label className="btn cursor-pointer">
+            <input
+              type="file"
+              className="hidden"
+              accept="image/*"
+              onChange={(e) => e.target.files && upload(e.target.files[0])}
+            />
+            Vybrat soubor
+          </label>
           <button type="button" className="btn" onClick={openGallery}>
             Vybrat z galerie
           </button>
@@ -147,11 +206,13 @@ export default function NewPostPage() {
                 </button>
               ))}
             </div>
-            {!gallery?.length && <div className="text-sm text-zinc-500">Galerie je prázdná.</div>}
+            {!gallery?.length && (
+              <div className="text-sm text-zinc-500">Galerie je prázdná.</div>
+            )}
           </div>
         )}
 
-        <div className="grid sm:grid-cols-3 gap-2 mt-3">
+        <div className="grid sm:grid-cols-3 gap-2 mt-1">
           <input
             className="input"
             placeholder="Autor / Zdroj obrázku"
@@ -164,18 +225,40 @@ export default function NewPostPage() {
             value={imageLicense}
             onChange={(e) => setImageLicense(e.target.value)}
           />
-          <input
+        <input
             className="input"
-            placeholder="URL původu obrázku"
+            placeholder="URL původu"
             value={imageSourceUrl}
             onChange={(e) => setImageSourceUrl(e.target.value)}
           />
         </div>
-        <div className="text-xs text-zinc-500 mt-1">Vyplň kvůli autorským právům.</div>
-      </div>
+        <p className="text-xs text-zinc-500">Vyplň kvůli autorským právům.</p>
+      </section>
 
-      <div className="space-y-2">
-        <div className="label">Zdroje (můžeš přidat více)</div>
+      {/* KATEGORIE */}
+      <section className="card p-5 space-y-2">
+        <h2 className="font-semibold">Kategorie</h2>
+        <select
+          className="input"
+          multiple
+          value={sel}
+          onChange={(e) => {
+            const ids = Array.from(e.target.selectedOptions).map((o) => o.value) // UUID
+            setSel(ids)
+          }}
+        >
+          {cats.map((c) => (
+            <option key={c.id} value={c.id}>
+              {c.title || c.slug || c.id}
+            </option>
+          ))}
+        </select>
+        <p className="text-xs text-zinc-500">Podrž Ctrl/Cmd pro výběr více kategorií.</p>
+      </section>
+
+      {/* ZDROJE */}
+      <section className="card p-5 space-y-2">
+        <h2 className="font-semibold">Zdroje</h2>
         {sources.map((s, idx) => (
           <div key={idx} className="grid sm:grid-cols-2 gap-2">
             <input
@@ -183,7 +266,9 @@ export default function NewPostPage() {
               placeholder="Název zdroje"
               value={s.title}
               onChange={(e) =>
-                setSources((prev) => prev.map((x, i) => (i === idx ? { ...x, title: e.target.value } : x)))
+                setSources((prev) =>
+                  prev.map((x, i) => (i === idx ? { ...x, title: e.target.value } : x)),
+                )
               }
             />
             <input
@@ -191,47 +276,44 @@ export default function NewPostPage() {
               placeholder="URL zdroje"
               value={s.url}
               onChange={(e) =>
-                setSources((prev) => prev.map((x, i) => (i === idx ? { ...x, url: e.target.value } : x)))
+                setSources((prev) =>
+                  prev.map((x, i) => (i === idx ? { ...x, url: e.target.value } : x)),
+                )
               }
             />
           </div>
         ))}
         <div className="flex gap-2">
-          <button type="button" className="btn" onClick={() => setSources((prev) => [...prev, { title: '', url: '' }])}>
+          <button
+            type="button"
+            className="btn"
+            onClick={() => setSources((prev) => [...prev, { title: '', url: '' }])}
+          >
             Přidat zdroj
           </button>
           {sources.length > 1 && (
-            <button type="button" className="btn" onClick={() => setSources((prev) => prev.slice(0, -1))}>
+            <button
+              type="button"
+              className="btn"
+              onClick={() => setSources((prev) => prev.slice(0, -1))}
+            >
               Odebrat poslední
             </button>
           )}
         </div>
-      </div>
+      </section>
 
-      <div>
-        <div className="label">Kategorie</div>
-        <select
-          className="input"
-          multiple
-          value={sel.map(String)}
-          onChange={(e) => {
-            const opts = Array.from(e.target.selectedOptions).map((o) => Number(o.value))
-            setSel(opts)
-          }}
-        >
-          {cats.map((c) => (
-            <option key={c.id} value={String(c.id)}>
-              {c.name}
-            </option>
-          ))}
-        </select>
-        <div className="text-xs text-zinc-500 mt-1">Podrž Ctrl/Cmd pro výběr více kategorií.</div>
+      {/* AKCE – sticky */}
+      <div className="sticky bottom-4 z-10">
+        <div className="card p-4 flex flex-wrap gap-2 items-center justify-between">
+          <div className="text-sm">
+            {err ? <span className="text-red-600">{err}</span> : (msg || '—')}
+          </div>
+          <button className="btn" onClick={submit} disabled={submitting}>
+            {submitting ? 'Ukládám…' : 'Uložit koncept'}
+          </button>
+        </div>
       </div>
-
-      <button className="btn" onClick={submit}>
-        Uložit koncept
-      </button>
-      {msg && <div className="text-sm text-zinc-600">{msg}</div>}
     </div>
   )
 }
