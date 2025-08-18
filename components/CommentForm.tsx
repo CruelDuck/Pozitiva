@@ -2,51 +2,70 @@
 import { useEffect, useRef, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
 
-declare global { interface Window { turnstile: any; } }
+declare global { interface Window { turnstile?: any } }
 
-type Suggest = { id: string; username: string | null; display_name: string | null; avatar_url: string | null };
+type Suggest = { id:string; username:string|null; display_name:string|null; avatar_url:string|null };
 
 export default function CommentForm({ postId, parentId }: { postId: string; parentId?: string }) {
   const [body, setBody] = useState("");
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<string|null>(null);
   const [user, setUser] = useState<any>(null);
 
   // mentions
   const [suggestOpen, setSuggestOpen] = useState(false);
-  const [suggestQuery, setSuggestQuery] = useState("");
   const [suggests, setSuggests] = useState<Suggest[]>([]);
   const [activeIndex, setActiveIndex] = useState(0);
-  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement|null>(null);
 
-  // captcha 
+  // CAPTCHA
   const siteKey = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY;
+  const widgetHostRef = useRef<HTMLDivElement|null>(null);
+  const widgetIdRef = useRef<any>(null);
+  const [token, setToken] = useState<string|null>(null);
 
+  useEffect(() => { supabase.auth.getUser().then(({data}) => setUser(data.user)); }, []);
+
+  // Programatické renderování Turnstile (bez spolehnutí na auto-render)
   useEffect(() => {
-    supabase.auth.getUser().then(({ data }) => setUser(data.user));
-  }, []);
+    if (!siteKey) { setToken("dev"); return; } // DEV fallback bez CAPTCHA
+    let cancelled = false;
 
-  // DEV fallback – když není siteKey, necháme projít bez captcha (server ji stejně nevyžaduje, pokud není TURNSTILE_SECRET_KEY)
-  const getCaptchaToken = (): string | null => {
-    if (!siteKey) return "dev";
-    const input = document.querySelector('input[name="cf-turnstile-response"]') as HTMLInputElement | null;
-    return input?.value || null;
-  };
+    // počkáme, než je skript připraven
+    function tryRender(attempt = 0) {
+      if (cancelled) return;
+      if (typeof window !== "undefined" && window.turnstile && widgetHostRef.current) {
+        try {
+          widgetIdRef.current = window.turnstile.render(widgetHostRef.current, {
+            sitekey: siteKey,
+            callback: (t: string) => setToken(t),
+            "expired-callback": () => setToken(null),
+            "error-callback": () => setToken(null),
+          });
+        } catch (e) {
+          // zkusíme to znovu
+          if (attempt < 10) setTimeout(() => tryRender(attempt + 1), 300);
+        }
+      } else {
+        if (attempt < 20) setTimeout(() => tryRender(attempt + 1), 300);
+      }
+    }
+
+    tryRender();
+    return () => { cancelled = true; };
+  }, [siteKey]);
 
   async function onChange(val: string) {
     setBody(val);
     const caret = textareaRef.current?.selectionStart ?? val.length;
     const uptoCaret = val.slice(0, caret);
-    const match = uptoCaret.match(/(^|\s)@([a-zA-Z0-9_]{1,30})$/);
-    if (match) {
-      const q = match[2].toLowerCase();
-      setSuggestQuery(q);
+    const m = uptoCaret.match(/(^|\s)@([a-zA-Z0-9_]{1,30})$/);
+    if (m) {
+      const q = m[2].toLowerCase();
+      const { data } = await supabase.from("profiles")
+        .select("id,username,display_name,avatar_url")
+        .ilike("username", q + "%").limit(5);
       setSuggestOpen(true);
-      const { data } = await supabase
-        .from("profiles")
-        .select("id, username, display_name, avatar_url")
-        .ilike("username", q + "%")
-        .limit(5);
       setSuggests((data || []) as any);
       setActiveIndex(0);
     } else {
@@ -61,9 +80,9 @@ export default function CommentForm({ postId, parentId }: { postId: string; pare
     const caret = el.selectionStart;
     const val = body;
     const uptoCaret = val.slice(0, caret);
-    const match = uptoCaret.match(/(^|\s)@([a-zA-Z0-9_]{1,30})$/);
-    if (!match) return;
-    const start = caret - match[2].length - 1;
+    const m = uptoCaret.match(/(^|\s)@([a-zA-Z0-9_]{1,30})$/);
+    if (!m) return;
+    const start = caret - m[2].length - 1;
     const before = val.slice(0, start);
     const after = val.slice(caret);
     const username = s.username || "";
@@ -92,8 +111,7 @@ export default function CommentForm({ postId, parentId }: { postId: string; pare
     if (!user) { setError("Přihlašte se."); return; }
     if (!body.trim()) { setError("Napište komentář."); return; }
 
-    const turnstileToken = getCaptchaToken();
-    if (siteKey && !turnstileToken) { setError("Dokončete ověření (CAPTCHA)."); return; }
+    if (siteKey && !token) { setError("Dokončete ověření (CAPTCHA)."); return; }
 
     setLoading(true);
     try {
@@ -102,15 +120,15 @@ export default function CommentForm({ postId, parentId }: { postId: string; pare
       const res = await fetch("/api/comments", {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${accessToken}` },
-        body: JSON.stringify({ postId, content: body, parentId: parentId || null, turnstileToken }),
+        body: JSON.stringify({ postId, content: body, parentId: parentId || null, turnstileToken: token }),
       });
       const out = await res.json().catch(() => ({}));
       if (!res.ok) { setError(out?.error || "Nepodařilo se odeslat komentář."); return; }
 
       setBody("");
-      // reset auto-render widgetu (pokud existuje)
-      try { if (window.turnstile) window.turnstile.reset(); } catch {}
-    } catch (e: any) {
+      setToken(siteKey ? null : "dev");
+      try { window.turnstile?.reset(widgetIdRef.current); } catch {}
+    } catch (e:any) {
       setError(e.message || "Chyba při odesílání.");
     } finally {
       setLoading(false);
@@ -154,9 +172,9 @@ export default function CommentForm({ postId, parentId }: { postId: string; pare
       )}
 
       <div className="mt-2 flex items-center gap-2">
-        {/* Auto-render widget se sám zainicializuje skriptem v layoutu */}
+        {/* host element pro programatické renderování */}
         {siteKey ? (
-          <div className="cf-turnstile" data-sitekey={siteKey} data-theme="light" />
+          <div ref={widgetHostRef} />
         ) : (
           <div className="text-xs text-zinc-500">CAPTCHA vypnutá (DEV).</div>
         )}
