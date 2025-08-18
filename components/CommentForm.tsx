@@ -2,67 +2,37 @@
 import { useEffect, useRef, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
 
-declare global {
-  interface Window { turnstile: any; }
-}
+declare global { interface Window { turnstile: any; } }
 
 type Suggest = { id: string; username: string | null; display_name: string | null; avatar_url: string | null };
 
 export default function CommentForm({ postId, parentId }: { postId: string; parentId?: string }) {
   const [body, setBody] = useState("");
   const [loading, setLoading] = useState(false);
-  const [token, setToken] = useState<string | null>(null);
-  const [user, setUser] = useState<any>(null);
   const [error, setError] = useState<string | null>(null);
+  const [user, setUser] = useState<any>(null);
 
-  // mentions state
+  // mentions
   const [suggestOpen, setSuggestOpen] = useState(false);
   const [suggestQuery, setSuggestQuery] = useState("");
   const [suggests, setSuggests] = useState<Suggest[]>([]);
   const [activeIndex, setActiveIndex] = useState(0);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
+  // captcha
   const siteKey = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY;
-  const widgetRef = useRef<HTMLDivElement | null>(null);
-  const widgetIdRef = useRef<any>(null);
 
   useEffect(() => {
     supabase.auth.getUser().then(({ data }) => setUser(data.user));
   }, []);
 
-  // Turnstile loader + DEV fallback
-  useEffect(() => {
-    setError(null);
+  // DEV fallback – když není siteKey, necháme projít bez captcha (server ji stejně nevyžaduje, pokud není TURNSTILE_SECRET_KEY)
+  const getCaptchaToken = (): string | null => {
+    if (!siteKey) return "dev";
+    const input = document.querySelector('input[name="cf-turnstile-response"]') as HTMLInputElement | null;
+    return input?.value || null;
+  };
 
-    // když není siteKey, povol odesílání bez captchy (DEV režim)
-    if (!siteKey) {
-      setToken("dev");
-      return;
-    }
-
-    // pokud je k dispozici siteKey, načti Turnstile skript
-    if (typeof window === "undefined") return;
-    const s = document.createElement("script");
-    s.src = "https://challenges.cloudflare.com/turnstile/v0/api.js";
-    s.async = true;
-    s.defer = true;
-    s.onload = () => {
-      try {
-        widgetIdRef.current = window.turnstile.render(widgetRef.current!, {
-          sitekey: siteKey,
-          callback: (t: string) => setToken(t),
-          "error-callback": () => setToken(null),
-          "expired-callback": () => setToken(null),
-        });
-      } catch (e) {
-        setError("Nepodařilo se inicializovat ověření (Turnstile).");
-      }
-    };
-    document.body.appendChild(s);
-    return () => { document.body.removeChild(s); };
-  }, [siteKey]);
-
-  // změny textu + detekce '@'
   async function onChange(val: string) {
     setBody(val);
     const caret = textareaRef.current?.selectionStart ?? val.length;
@@ -119,52 +89,27 @@ export default function CommentForm({ postId, parentId }: { postId: string; pare
 
   async function submit() {
     setError(null);
-
     if (!user) { setError("Přihlašte se."); return; }
     if (!body.trim()) { setError("Napište komentář."); return; }
 
-    // pokus o získání tokenu (pro případy, kdy callback neběžel)
-    if (!token && typeof window !== "undefined" && window.turnstile && widgetIdRef.current) {
-      const t = window.turnstile.getResponse(widgetIdRef.current);
-      if (t) setToken(t);
-    }
-    // pokud stále není token a máme siteKey → blokuj (prod režim)
-    if (!token && siteKey) {
-      setError("Dokončete ověření (Turnstile).");
-      return;
-    }
+    const turnstileToken = getCaptchaToken();
+    if (siteKey && !turnstileToken) { setError("Dokončete ověření (CAPTCHA)."); return; }
 
     setLoading(true);
     try {
-      const session = await supabase.auth.getSession();
-      const accessToken = session.data.session?.access_token || "";
+      const { data: session } = await supabase.auth.getSession();
+      const accessToken = session?.session?.access_token || "";
       const res = await fetch("/api/comments", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${accessToken}`,
-        },
-        // DŮLEŽITÉ: API očekává 'content', ne 'body'
-        body: JSON.stringify({
-          postId,
-          content: body,
-          parentId: parentId || null,
-          turnstileToken: token, // v dev je "dev", na serveru se neověří, pokud chybí secret
-        }),
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${accessToken}` },
+        body: JSON.stringify({ postId, content: body, parentId: parentId || null, turnstileToken }),
       });
-
       const out = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        setError(out?.error || "Nepodařilo se odeslat komentář.");
-        return;
-      }
+      if (!res.ok) { setError(out?.error || "Nepodařilo se odeslat komentář."); return; }
 
-      // success
       setBody("");
-      setToken(null);
-      if (typeof window !== "undefined" && window.turnstile && widgetIdRef.current) {
-        try { window.turnstile.reset(widgetIdRef.current); } catch {}
-      }
+      // reset auto-render widgetu (pokud existuje)
+      try { if (window.turnstile) window.turnstile.reset(); } catch {}
     } catch (e: any) {
       setError(e.message || "Chyba při odesílání.");
     } finally {
@@ -209,8 +154,12 @@ export default function CommentForm({ postId, parentId }: { postId: string; pare
       )}
 
       <div className="mt-2 flex items-center gap-2">
-        {/* Turnstile widget (jen když máme siteKey) */}
-        {siteKey ? <div ref={widgetRef} /> : <div className="text-xs text-zinc-500">CAPTCHA vypnutá (DEV).</div>}
+        {/* Auto-render widget se sám zainicializuje skriptem v layoutu */}
+        {siteKey ? (
+          <div className="cf-turnstile" data-sitekey={siteKey} data-theme="light" />
+        ) : (
+          <div className="text-xs text-zinc-500">CAPTCHA vypnutá (DEV).</div>
+        )}
 
         <button
           onClick={submit}
