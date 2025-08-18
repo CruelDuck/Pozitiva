@@ -1,4 +1,3 @@
-// app/api/comments/route.ts
 import { NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 
@@ -6,7 +5,7 @@ export const runtime = 'nodejs'
 
 const supa = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE! // server-only key (Service role)
+  process.env.SUPABASE_SERVICE_ROLE! // Service role key
 )
 
 type Body = {
@@ -48,16 +47,8 @@ export async function POST(req: Request) {
     if (content.length > 5000) {
       return NextResponse.json({ error: 'Komentář je příliš dlouhý.' }, { status: 400 })
     }
-    
-const resp = await fetch("https://challenges.cloudflare.com/turnstile/v0/siteverify", {
-  method: "POST",
-  headers: { "Content-Type": "application/x-www-form-urlencoded" },
-  body: `secret=${process.env.TURNSTILE_SECRET_KEY}&response=${req.body.turnstileToken}`,
-});
-const data = await resp.json();
-if (!data.success) return res.status(400).send("Chybí ověření (captcha).");
 
-    
+    // ověření captcha
     const ip = (req.headers.get('x-forwarded-for') || '').split(',')[0] || null
     const v = await verifyTurnstile(turnstileToken, ip)
     if (!v.ok) return NextResponse.json({ error: v.error }, { status: 400 })
@@ -83,10 +74,6 @@ if (!data.success) return res.status(400).send("Chybí ověření (captcha).");
   }
 }
 
-/**
- * Vyčte user_id (sub) z Bearer JWT bez síťového volání.
- * Vrací objekt { id: string | null }.
- */
 async function fetchUserFromAuthHeader(authHeader: string | null): Promise<{ id: string | null }> {
   try {
     if (!authHeader?.toLowerCase().startsWith('bearer ')) return { id: null }
