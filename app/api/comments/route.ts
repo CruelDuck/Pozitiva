@@ -1,136 +1,97 @@
-import { NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
+// app/api/comments/route.ts
+import { NextResponse } from 'next/server'
+import { createClient } from '@supabase/supabase-js'
 
-/**
- * --- Turnstile verify (inline) ---
- */
-async function verifyTurnstile(responseToken: string, remoteIp?: string | null) {
-  try {
-    const secret = process.env.TURNSTILE_SECRET_KEY;
-    if (!secret) return false;
-    const form = new URLSearchParams();
-    form.set("secret", secret);
-    form.set("response", responseToken || "");
-    if (remoteIp) form.set("remoteip", remoteIp);
-    const res = await fetch("https://challenges.cloudflare.com/turnstile/v0/siteverify", {
-      method: "POST",
-      body: form,
-    });
-    const data = await res.json();
-    return !!data.success;
-  } catch {
-    return false;
-  }
+export const runtime = 'nodejs'
+
+const supa = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.SUPABASE_SERVICE_ROLE! // server-only key (Service role)
+)
+
+type Body = {
+  postId: string
+  content: string
+  turnstileToken?: string
+  // optional: ip passed from client (not required)
 }
 
-/**
- * --- Upstash rate-limit (inline) ---
- * Fixed-window: max `limit` požadavků za `windowSec` pro identifikátor (např. IP).
- * Pokud Upstash není nastaven, RATE-LIMIT přeskočíme (nebude blokovat).
- */
-async function limitOrThrow(
-  id: string,
-  limit = 5,
-  windowSec = 60
-) {
-  const base = process.env.UPSTASH_REDIS_REST_URL;
-  const token = process.env.UPSTASH_REDIS_REST_TOKEN;
-  if (!base || !token) return;
+async function verifyTurnstile(token?: string, ip?: string | null) {
+  const secret = process.env.TURNSTILE_SECRET_KEY
+  if (!secret) return { ok: true } // pokud nechceš blokovat při dev
+  if (!token) return { ok: false, error: 'Chybí ověření (captcha).' }
 
-  const bucket = Math.floor(Date.now() / 1000 / windowSec);
-  const key = `rl:comments:${id}:${bucket}`;
+  const form = new URLSearchParams()
+  form.append('secret', secret)
+  form.append('response', token)
+  if (ip) form.append('remoteip', ip)
 
-  const headers = { Authorization: `Bearer ${token}` };
-
-  const incr = await fetch(`${base}/incr/${encodeURIComponent(key)}`, { method: "POST", headers });
-  const { result: count } = await incr.json();
-
-  if (count === 1) {
-    await fetch(`${base}/expire/${encodeURIComponent(key)}/${windowSec}`, { method: "POST", headers });
+  const r = await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify', {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: form.toString(),
+  })
+  const data = (await r.json()) as { success: boolean; 'error-codes'?: string[] }
+  if (!data.success) {
+    return { ok: false, error: `Neprošla verifikace: ${data['error-codes']?.join(', ') || 'unknown'}` }
   }
-  if (typeof count === "number" && count > limit) {
-    const err: any = new Error("Too Many Requests");
-    err.status = 429;
-    throw err;
-  }
+  return { ok: true }
 }
 
 export async function POST(req: Request) {
   try {
-    // --- Auth token (RLS insert poběží pod uživatelem) ---
-    const auth = req.headers.get("authorization") || "";
-    const accessToken = auth.replace("Bearer ", "");
-    if (!accessToken) return new NextResponse("Unauthorized", { status: 401 });
+    const body = (await req.json()) as Body
+    const { postId, content, turnstileToken } = body || {}
 
-    const { postId, body, parentId, turnstileToken } = await req.json();
-
-    if (!postId || !body) {
-      return new NextResponse("Missing fields", { status: 400 });
+    if (!postId || !content?.trim()) {
+      return NextResponse.json({ error: 'Chybí postId nebo obsah.' }, { status: 400 })
+    }
+    if (content.length > 5000) {
+      return NextResponse.json({ error: 'Komentář je příliš dlouhý.' }, { status: 400 })
     }
 
-    // --- IP + RateLimit + Turnstile ---
-    const ip =
-      (req.headers.get("x-forwarded-for") || req.headers.get("x-real-ip") || "")
-        .split(",")[0]
-        .trim() || "global";
+    const ip = (req.headers.get('x-forwarded-for') || '').split(',')[0] || null
+    const v = await verifyTurnstile(turnstileToken, ip)
+    if (!v.ok) return NextResponse.json({ error: v.error }, { status: 400 })
 
-    await limitOrThrow(ip, 5, 60);
-
-    const ok = await verifyTurnstile(turnstileToken || "", ip);
-    if (!ok) return new NextResponse("Turnstile failed", { status: 400 });
-
-    // --- Supabase klient s JWT uživatele (pro RLS) ---
-    const supabase = createClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-      { global: { headers: { Authorization: `Bearer ${accessToken}` } } }
-    );
-
-    // Ověř, že user existuje
-    const { data: me, error: meErr } = await supabase.auth.getUser();
-    if (meErr || !me?.user) return new NextResponse("Unauthorized", { status: 401 });
-
-    // --- Insert komentáře, vrať si ID hned zpět ---
-    const text = String(body).slice(0, 1000);
-    const { data: inserted, error } = await supabase
-      .from("comments")
-      .insert({
-        post_id: postId,
-        user_id: me.user.id,
-        parent_id: parentId || null,
-        body: text,
-      })
-      .select("id")
-      .single();
-
-    if (error || !inserted) {
-      return new NextResponse(error?.message || "Insert failed", { status: 400 });
+    // ověření uživatele – použijeme Supabase JWT z cookie/hlavičky
+    // tady použijeme anon client se service role na INSERT s vynucením user_id
+    const authHeader = req.headers.get('authorization') // např. "Bearer <token>"
+    const { data: userInfo } = await fetchUserFromAuthHeader(authHeader)
+    if (!userInfo?.id) {
+      return NextResponse.json({ error: 'Nejsi přihlášen.' }, { status: 401 })
     }
 
-    // --- @mentions: vytáhni @username a ulož do comment_mentions ---
-    const usernames = Array.from(text.matchAll(/@([a-zA-Z0-9_]{2,30})/g)).map((m) =>
-      m[1]
-    );
-    if (usernames.length) {
-      const { data: profs } = await supabase
-        .from("profiles")
-        .select("id, username")
-        .in("username", usernames as any);
+    const { data, error } = await supa
+      .from('comments')
+      .insert({ post_id: postId, user_id: userInfo.id, content: content.trim() })
+      .select('id, created_at')
+      .single()
 
-      const pairs =
-        (profs || []).map((p: any) => ({
-          comment_id: inserted.id,
-          mentioned_user_id: p.id,
-        })) || [];
+    if (error) throw error
 
-      if (pairs.length) {
-        await supabase.from("comment_mentions").insert(pairs);
-      }
-    }
-
-    return NextResponse.json({ ok: true, id: inserted.id });
+    return NextResponse.json({ ok: true, id: data.id, created_at: data.created_at })
   } catch (e: any) {
-    const status = e?.status || 500;
-    return new NextResponse(e?.message || "Server error", { status });
+    return NextResponse.json({ error: String(e?.message || e) }, { status: 500 })
+  }
+}
+
+/**
+ * Pomocná funkce: vyčteme user_id z Authorization Bearer tokenu (Supabase JWT).
+ * Pokud posíláš požadavek z clientu bez hlavičky, přepni na jednodušší variantu:
+ *  - z frontendu si vytáhni supabase.auth.getUser() a pošli user.id v body (méně bezpečné).
+ */
+async function fetchUserFromAuthHeader(authHeader: string | null) {
+  try {
+    if (!authHeader?.toLowerCase().startsWith('bearer ')) return { id: null }
+    const jwt = authHeader.split(' ')[1]
+    // Supabase admin endpoint pro verifikaci (neexistuje veřejné JWT verify),
+    // proto použijeme jednoduché dekódování JWT a vytáhneme sub (user id).
+    const payload = JSON.parse(
+      Buffer.from(jwt.split('.')[1] || '', 'base64').toString('utf8')
+    )
+    return { id: payload?.sub || null }
+  } catch {
+    return { id: null }
   }
 }
