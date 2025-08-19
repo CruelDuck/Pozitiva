@@ -11,6 +11,11 @@ const inter = Inter({ subsets: ["latin"], display: "swap" });
 const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL || "https://pozitiva.vercel.app";
 const TITLE = "Pozitiva";
 const DESCRIPTION = "Pozitivní zprávy – hezké novinky každý den.";
+<script
+  dangerouslySetInnerHTML={{
+    __html: `window.ENV = { TURNSTILE_SITE_KEY: ${JSON.stringify(process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY || '')} }`,
+  }}
+/>
 
 export const metadata: Metadata = {
   title: TITLE,
