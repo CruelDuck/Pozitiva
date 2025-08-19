@@ -4,7 +4,7 @@ import { createClient } from '@supabase/supabase-js';
 
 export const runtime = 'nodejs';
 
-// ---- Supabase admin client (Service Role) ----
+// ---- Supabase admin client (Service Role) ---- 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const SERVICE_ROLE = process.env.SUPABASE_SERVICE_ROLE!;
 const supa = createClient(SUPABASE_URL, SERVICE_ROLE);
