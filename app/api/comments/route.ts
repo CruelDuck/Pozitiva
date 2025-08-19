@@ -1,3 +1,4 @@
+// app/api/comments/route.ts
 import { NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 
@@ -5,18 +6,19 @@ export const runtime = 'nodejs'
 
 const supa = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE! // Service role key
+  process.env.SUPABASE_SERVICE_ROLE!
 )
 
 type Body = {
   postId: string
   content: string
+  parentId?: number | null
   turnstileToken?: string
 }
 
 async function verifyTurnstile(token?: string, ip?: string | null) {
   const secret = process.env.TURNSTILE_SECRET_KEY
-  if (!secret) return { ok: true } // v dev režimu neblokuj
+  if (!secret) return { ok: true }            // DEV: bez ověřování
   if (!token) return { ok: false, error: 'Chybí ověření (captcha).' }
 
   const form = new URLSearchParams()
@@ -29,17 +31,15 @@ async function verifyTurnstile(token?: string, ip?: string | null) {
     headers: { 'content-type': 'application/x-www-form-urlencoded' },
     body: form.toString(),
   })
-  const data = (await r.json()) as { success: boolean; 'error-codes'?: string[] }
-  if (!data.success) {
-    return { ok: false, error: `Neprošla verifikace: ${data['error-codes']?.join(', ') || 'unknown'}` }
-  }
+  const data = await r.json()
+  if (!data?.success) return { ok: false, error: 'Neprošla verifikace CAPTCHA.' }
   return { ok: true }
 }
 
 export async function POST(req: Request) {
   try {
     const body = (await req.json()) as Body
-    const { postId, content, turnstileToken } = body || {}
+    const { postId, content, parentId = null, turnstileToken } = body || {}
 
     if (!postId || !content?.trim()) {
       return NextResponse.json({ error: 'Chybí postId nebo obsah.' }, { status: 400 })
@@ -48,33 +48,32 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'Komentář je příliš dlouhý.' }, { status: 400 })
     }
 
-    // ověření captcha
+    // CAPTCHA (prod) / přeskoč (dev)
     const ip = (req.headers.get('x-forwarded-for') || '').split(',')[0] || null
     const v = await verifyTurnstile(turnstileToken, ip)
     if (!v.ok) return NextResponse.json({ error: v.error }, { status: 400 })
 
-    // Získáme user id z Authorization: Bearer <jwt>
+    // uživatel z Authorization: Bearer <jwt>
     const authHeader = req.headers.get('authorization')
-    const userInfo = await fetchUserFromAuthHeader(authHeader)
+    const userInfo = await userFromAuthHeader(authHeader)
     if (!userInfo?.id) {
       return NextResponse.json({ error: 'Nejsi přihlášen.' }, { status: 401 })
     }
 
+    // ⬇⬇⬇ KLÍČOVÉ: vložení přes RPC, ne přes .from('comments')
     const { data, error } = await supa
-      .from('comments')
-      .insert({ post_id: postId, user_id: userInfo.id, content: content.trim() })
-      .select('id, created_at')
-      .single()
+      .rpc('add_comment', { pid: postId, uid: userInfo.id, txt: content.trim(), parent: parentId })
 
     if (error) throw error
 
-    return NextResponse.json({ ok: true, id: data.id, created_at: data.created_at })
+    const row = Array.isArray(data) ? data[0] : data
+    return NextResponse.json({ ok: true, id: row?.id, created_at: row?.created_at })
   } catch (e: any) {
     return NextResponse.json({ error: String(e?.message || e) }, { status: 500 })
   }
 }
 
-async function fetchUserFromAuthHeader(authHeader: string | null): Promise<{ id: string | null }> {
+async function userFromAuthHeader(authHeader: string | null): Promise<{ id: string | null }> {
   try {
     if (!authHeader?.toLowerCase().startsWith('bearer ')) return { id: null }
     const jwt = authHeader.split(' ')[1]
